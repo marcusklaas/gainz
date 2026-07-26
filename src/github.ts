@@ -20,7 +20,7 @@ function fromBase64(b64: string): string {
 }
 
 function url(s: Settings, path: string): string {
-  return `https://api.github.com/repos/${s.owner}/${s.repo}/contents/${path}`;
+  return `https://api.github.com/repos/${s.repo}/contents/${path}`;
 }
 
 function headers(s: Settings): HeadersInit {
@@ -74,9 +74,9 @@ export async function putFile(
 
 /** Cheap credential check for the setup screen. */
 export async function checkAccess(s: Settings): Promise<void> {
-  const res = await fetch(`https://api.github.com/repos/${s.owner}/${s.repo}`, {
+  const res = await fetch(`https://api.github.com/repos/${s.repo}`, {
     headers: headers(s),
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`Cannot reach ${s.owner}/${s.repo}: ${res.status}`);
+  if (!res.ok) throw new Error(`Cannot reach ${s.repo}: ${res.status}`);
 }

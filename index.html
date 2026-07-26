@@ -18,8 +18,9 @@
   <h1>Setup</h1>
   <p class="note">Stored on this device only. Nothing is sent anywhere except GitHub.</p>
   <form id="setup-form">
-    <label>Owner <input id="s-owner" required autocomplete="off"></label>
-    <label>Data repo <input id="s-repo" required autocomplete="off"></label>
+    <label>Data repo
+      <input id="s-repo" required autocomplete="off" placeholder="https://github.com/you/gainz-data">
+    </label>
     <label>Branch <input id="s-branch" value="main" required autocomplete="off"></label>
     <label>GitHub token <input id="s-pat" type="password" required autocomplete="off"></label>
     <button>Connect</button>
@@ -95,24 +96,9 @@
 
     <h2>Goal</h2>
     <form id="goal-form">
-      <label>Phase
-        <select id="g-kind">
-          <option value="cut">cut</option>
-          <option value="maintain">maintain</option>
-          <option value="bulk">bulk</option>
-        </select>
-      </label>
       <label>Offset from TDEE (kcal) <input id="g-offset" type="number" required></label>
       <label>Band width (kcal) <input id="g-window" type="number" min="0" required></label>
       <label>Protein g per kg <input id="g-protein" type="number" step="0.1" required></label>
-      <label>Started <input id="g-started" type="date" required></label>
-      <label>Ends on
-        <select id="g-end-type">
-          <option value="review">review date</option>
-          <option value="weight">target weight</option>
-        </select>
-      </label>
-      <label>End value <input id="g-end-value" required></label>
 
       <h2>Body</h2>
       <label>Height cm <input id="b-height" type="number" required></label>
@@ -152,8 +138,9 @@
 
     <h2>Connection</h2>
     <form id="conn-form">
-      <label>Owner <input id="c-owner" required autocomplete="off"></label>
-      <label>Data repo <input id="c-repo" required autocomplete="off"></label>
+      <label>Data repo
+        <input id="c-repo" required autocomplete="off" placeholder="https://github.com/you/gainz-data">
+      </label>
       <label>Branch <input id="c-branch" required autocomplete="off"></label>
       <label>GitHub token <input id="c-pat" type="password" required autocomplete="off"></label>
       <label>Anthropic API key <input id="c-anthropic" type="password" autocomplete="off"></label>

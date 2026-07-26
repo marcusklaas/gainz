@@ -53,19 +53,18 @@ export interface MonthFile {
   days: Record<DayKey, Day>;
 }
 
-export type GoalKind = "cut" | "maintain" | "bulk";
-
+/**
+ * What to aim for. The sign of the offset is the phase — there is no separate
+ * cut/maintain/bulk field, because it would only ever restate it. When a phase
+ * started and when to review it are answered by the data repo's own history:
+ * every change to this file is a commit with a date on it.
+ */
 export interface Goal {
-  kind: GoalKind;
-  startedOn: DayKey;
   /** Added to TDEE to give the day's calorie goal. Negative cuts, positive bulks. */
   kcalOffset: number;
   /** Full width of the band around the goal; half of it lands on each side. */
   kcalWindow: number;
   proteinGPerKg: number;
-  endCondition:
-    | { type: "review"; on: DayKey }
-    | { type: "weight"; weightKg: number };
 }
 
 export interface Config {

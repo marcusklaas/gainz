@@ -4,7 +4,14 @@ import { addDays, humanDay, monthOf, nowTime, todayKey } from "./dates.js";
 import { dayKcal, dayProtein, estimate, type Estimate } from "./estimate.js";
 import { checkAccess } from "./github.js";
 import { estimateFood } from "./llm.js";
-import { isConfigured, loadSettings, saveSettings, type Settings } from "./settings.js";
+import {
+  isConfigured,
+  loadSettings,
+  parseRepo,
+  repoUrl,
+  saveSettings,
+  type Settings,
+} from "./settings.js";
 import {
   cachedConfig,
   flush,
@@ -105,16 +112,16 @@ async function sync(): Promise<void> {
 
 $("setup-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const s: Settings = {
-    owner: val("s-owner"),
-    repo: val("s-repo"),
-    branch: val("s-branch"),
-    pat: val("s-pat"),
-    anthropicKey: "",
-    openaiKey: "",
-  };
   msg("setup-msg", "Checking...");
+  let s: Settings;
   try {
+    s = {
+      repo: parseRepo(val("s-repo")),
+      branch: val("s-branch"),
+      pat: val("s-pat"),
+      anthropicKey: "",
+      openaiKey: "",
+    };
     await checkAccess(s);
   } catch (err) {
     msg("setup-msg", String((err as Error).message), "err");
@@ -239,11 +246,7 @@ async function render(): Promise<void> {
   const cfg = cachedConfig();
   if (!cfg) return;
 
-  // A config written before a key existed reads back as undefined, which would
-  // silently poison every derived number. Name the gap instead of degrading.
-  const missing = Object.keys(suggestedConfig().estimator).filter(
-    (k) => !Number.isFinite((cfg.estimator as unknown as Record<string, number>)[k]),
-  );
+  const missing = missingNumbers(cfg);
   if (missing.length) {
     const note = `Open Settings and press Save config — missing ${missing.join(", ")}.`;
     $("goals").hidden = true;
@@ -290,6 +293,24 @@ async function recordGoal(d: Day, est: Estimate): Promise<void> {
 }
 
 const round = (n: number) => String(Math.round(n));
+
+/**
+ * Settings a config predating them reads back as undefined, which would poison
+ * every derived number in silence. Name the gap instead of degrading — one Save
+ * in Settings fills them, since the form falls back to the suggested values.
+ * There is no migration code anywhere: this is what stands in for it.
+ */
+function missingNumbers(cfg: Config): string[] {
+  const suggested = suggestedConfig();
+  const out: string[] = [];
+  for (const section of ["goal", "estimator"] as const) {
+    for (const [key, value] of Object.entries(suggested[section])) {
+      if (typeof value !== "number") continue;
+      if (!Number.isFinite((cfg[section] as unknown as Record<string, number>)[key])) out.push(key);
+    }
+  }
+  return out;
+}
 
 function bar(id: string, fraction: number, state: string): void {
   const e = $(id);
@@ -390,14 +411,7 @@ function suggestedConfig(): Config {
   return {
     version: 1,
     bio: { heightCm: 192, birth: "1991-03", sex: "m" },
-    goal: {
-      kind: "maintain",
-      startedOn: todayKey(),
-      kcalOffset: 0,
-      kcalWindow: 400,
-      proteinGPerKg: 1.6,
-      endCondition: { type: "review", on: addDays(todayKey(), 90) },
-    },
+    goal: { kcalOffset: 0, kcalWindow: 400, proteinGPerKg: 1.6 },
     estimator: {
       levelHalfLifeDays: 10,
       trendHalfLifeDays: 28,
@@ -417,8 +431,7 @@ function suggestedConfig(): Config {
 function fillSettingsForms(): void {
   const s = loadSettings();
   if (s) {
-    $<HTMLInputElement>("c-owner").value = s.owner;
-    $<HTMLInputElement>("c-repo").value = s.repo;
+    $<HTMLInputElement>("c-repo").value = repoUrl(s);
     $<HTMLInputElement>("c-branch").value = s.branch;
     $<HTMLInputElement>("c-pat").value = s.pat;
     $<HTMLInputElement>("c-anthropic").value = s.anthropicKey ?? "";
@@ -433,16 +446,9 @@ function fillSettingsForms(): void {
   const c: Config = saved
     ? { ...saved, estimator: { ...suggested.estimator, ...saved.estimator } }
     : suggested;
-  $<HTMLSelectElement>("g-kind").value = c.goal.kind;
   $<HTMLInputElement>("g-offset").value = String(c.goal.kcalOffset);
   $<HTMLInputElement>("g-window").value = String(c.goal.kcalWindow);
   $<HTMLInputElement>("g-protein").value = String(c.goal.proteinGPerKg);
-  $<HTMLInputElement>("g-started").value = c.goal.startedOn;
-  $<HTMLSelectElement>("g-end-type").value = c.goal.endCondition.type;
-  $<HTMLInputElement>("g-end-value").value =
-    c.goal.endCondition.type === "review"
-      ? c.goal.endCondition.on
-      : String(c.goal.endCondition.weightKg);
   $<HTMLInputElement>("b-height").value = String(c.bio.heightCm);
   $<HTMLInputElement>("b-birth").value = c.bio.birth;
   $<HTMLSelectElement>("b-sex").value = c.bio.sex;
@@ -462,8 +468,6 @@ function fillSettingsForms(): void {
 
 $("goal-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const endType = $<HTMLSelectElement>("g-end-type").value;
-  const endValue = val("g-end-value");
   const c: Config = {
     version: 1,
     bio: {
@@ -472,15 +476,9 @@ $("goal-form").addEventListener("submit", async (e) => {
       sex: $<HTMLSelectElement>("b-sex").value as "m" | "f",
     },
     goal: {
-      kind: $<HTMLSelectElement>("g-kind").value as Config["goal"]["kind"],
-      startedOn: val("g-started"),
       kcalOffset: num("g-offset"),
       kcalWindow: num("g-window"),
       proteinGPerKg: num("g-protein"),
-      endCondition:
-        endType === "review"
-          ? { type: "review", on: endValue }
-          : { type: "weight", weightKg: Number(endValue) },
     },
     estimator: {
       levelHalfLifeDays: num("e-level"),
@@ -508,15 +506,15 @@ $("goal-form").addEventListener("submit", async (e) => {
 
 $("conn-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const s: Settings = {
-    owner: val("c-owner"),
-    repo: val("c-repo"),
-    branch: val("c-branch"),
-    pat: val("c-pat"),
-    anthropicKey: val("c-anthropic"),
-    openaiKey: val("c-openai"),
-  };
+  let s: Settings;
   try {
+    s = {
+      repo: parseRepo(val("c-repo")),
+      branch: val("c-branch"),
+      pat: val("c-pat"),
+      anthropicKey: val("c-anthropic"),
+      openaiKey: val("c-openai"),
+    };
     await checkAccess(s);
   } catch (err) {
     msg("conn-msg", String((err as Error).message), "err");

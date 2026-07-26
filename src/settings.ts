@@ -3,7 +3,7 @@
 // this is filled in. See PLAN.md "Client-side state".
 
 export interface Settings {
-  owner: string;
+  /** "owner/repo" — what the API wants. Parsed from the link that was pasted. */
   repo: string;
   branch: string;
   pat: string;
@@ -14,13 +14,22 @@ export interface Settings {
 
 const KEY = "gainz.settings";
 
+/**
+ * Takes the link straight off the repo's address bar. The scheme, a .git
+ * suffix and a trailing slash are all optional, so pasting from anywhere works
+ * and so does typing the bare owner/repo.
+ */
+export function parseRepo(input: string): string {
+  const m = input.trim().match(/^(?:https?:\/\/github\.com\/)?([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/);
+  if (!m) throw new Error("Expected a link like https://github.com/owner/repo");
+  return `${m[1]}/${m[2]}`;
+}
+
+export const repoUrl = (s: Settings): string => `https://github.com/${s.repo}`;
+
 export function loadSettings(): Settings | null {
   const raw = localStorage.getItem(KEY);
-  if (!raw) return null;
-  const s = JSON.parse(raw) as Settings & { llmKey?: string };
-  // Before providers were split there was a single llmKey, always Anthropic.
-  if (s.llmKey && !s.anthropicKey) s.anthropicKey = s.llmKey;
-  return s;
+  return raw ? (JSON.parse(raw) as Settings) : null;
 }
 
 export function saveSettings(s: Settings): void {
@@ -29,5 +38,5 @@ export function saveSettings(s: Settings): void {
 
 export function isConfigured(): boolean {
   const s = loadSettings();
-  return !!s && !!s.owner && !!s.repo && !!s.pat;
+  return !!s && !!s.repo && !!s.pat;
 }
