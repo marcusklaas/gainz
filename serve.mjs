@@ -11,6 +11,8 @@ const TYPES = {
   ".json": "application/json",
   ".map": "application/json",
   ".csv": "text/csv",
+  ".png": "image/png",
+  ".webmanifest": "application/manifest+json",
 };
 
 createServer(async (req, res) => {

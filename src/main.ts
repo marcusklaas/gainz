@@ -615,4 +615,12 @@ $("csv-go").addEventListener("click", async () => {
 // -------------------------------------------------------------------- start
 
 addEventListener("online", () => void sync());
+
+// The path is relative, so the worker registers at whatever prefix the app is
+// served from and its scope covers exactly the app. Failure is ignored: offline
+// support is a bonus and must never keep the app from starting.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+
 void boot();

@@ -40,8 +40,16 @@ jobs:
       - name: Assemble site
         run: |
           mkdir _site
-          cp index.html style.css _site/
-          cp -r js vendor _site/
+          cp index.html style.css manifest.webmanifest sw.js _site/
+          cp -r js vendor icons _site/
+          # Type declarations and source maps are build-time only. The maps
+          # would point at sources that are not served anyway, and the service
+          # worker should not be caching either.
+          find _site -name '*.d.ts' -o -name '*.map' | xargs -r rm
+          # Names the cache after this commit, so deploying replaces the old one
+          # instead of serving stale modules forever.
+          sed -i "s/__VERSION__/${GITHUB_SHA::12}/" _site/sw.js
+          grep -q "gainz-${GITHUB_SHA::12}" _site/sw.js
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

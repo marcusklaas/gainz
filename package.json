@@ -5,7 +5,8 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
-    "serve": "node serve.mjs"
+    "serve": "node serve.mjs",
+    "icons": "node tools/icons.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.2"
