@@ -160,6 +160,10 @@ function options(width: number): uPlot.Options {
     ],
     series: [
       {
+        // No year: the readout sits next to a fixed-width label column on a
+        // phone, and every point on screen is within a few months of today.
+        // The weekday earns its place — weekend weigh-ins read differently.
+        label: "date",
         value: (_u, v) =>
           v == null
             ? "—"
@@ -167,7 +171,6 @@ function options(width: number): uPlot.Options {
                 weekday: "short",
                 day: "numeric",
                 month: "short",
-                year: "numeric",
               }),
       },
       {

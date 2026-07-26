@@ -120,17 +120,35 @@ h3 span {
 #chart .uplot { width: 100%; }
 
 /* Live legend doubles as the hover readout: date and both values at the cursor.
-   The legend is a table whose columns auto-size to their contents, so without
-   table-layout: fixed every column reflows as the cursor moves and the readout
-   shuffles sideways. Fixed columns plus tabular figures hold it still. */
+   uPlot hardcodes its inline legend class for single-value legends, which lays
+   the three series out side by side — so a wider date shoved the next series
+   along, and on a narrow screen the last one wrapped. Undoing the inline
+   display puts each series on its own line, and a fixed table layout then pins
+   the value column so nothing moves as the cursor sweeps. */
 #chart .u-legend {
+  display: table;
   table-layout: fixed;
   width: 100%;
   margin-top: .5rem;
   font-size: .8rem;
   text-align: left;
 }
-#chart .u-legend th { width: 5.5rem; }
+#chart .u-legend tbody { display: table-row-group; }
+#chart .u-legend tr { display: table-row; margin-right: 0; }
+#chart .u-legend td { display: table-cell; }
+/* Just wide enough for "weighed", the longest label, at .8rem. The value column
+   takes whatever is left, which on the narrowest phone is still ample for
+   "Fri, 10 Jul". Ellipsis rather than nowrap alone, so a wider system font
+   degrades to a clipped label instead of pushing the value off the row. */
+#chart .u-legend th {
+  display: table-cell;
+  width: 4rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Values keep their own row even if one runs long. */
+#chart .u-legend .u-value { white-space: nowrap; }
 #chart .u-legend .u-series > * { padding: .1rem .5rem .1rem 0; }
 #chart .u-legend .u-series th { color: var(--dim); font-weight: 400; }
 #chart .u-legend .u-value { color: var(--fg); font-variant-numeric: tabular-nums; }
