@@ -17,12 +17,10 @@ import { loadSettings, type Settings } from "./settings.js";
 import { addDays, monthOf } from "./dates.js";
 import {
   emptyDay,
-  emptyFavorites,
   emptyMonth,
   type Config,
   type Day,
   type DayKey,
-  type FavoritesFile,
   type MonthFile,
   type MonthKey,
 } from "./types.js";
@@ -37,7 +35,6 @@ const BASE = "gainz.base.";
 type Outbox = Record<string, DayKey[] | null>;
 
 export const CONFIG_PATH = "config.json";
-export const FAVORITES_PATH = "favorites.json";
 
 export function monthPath(m: MonthKey): string {
   return `data/${m.slice(0, 4)}/${m}.json`;
@@ -203,23 +200,6 @@ export async function refreshConfig(): Promise<Config | null> {
 export function saveConfig(c: Config): void {
   writeCache(CONFIG_PATH, JSON.stringify(c, null, 2));
   markDirty(CONFIG_PATH, null);
-}
-
-// ------------------------------------------------------------- favorites
-
-export function cachedFavorites(): FavoritesFile {
-  const raw = readCache(FAVORITES_PATH);
-  return raw ? (JSON.parse(raw) as FavoritesFile) : emptyFavorites();
-}
-
-export async function refreshFavorites(): Promise<void> {
-  const remote = await getFile(settings(), FAVORITES_PATH);
-  if (remote) writeCache(FAVORITES_PATH, remote.text);
-}
-
-export function saveFavorites(f: FavoritesFile): void {
-  writeCache(FAVORITES_PATH, JSON.stringify(f, null, 2));
-  markDirty(FAVORITES_PATH, null);
 }
 
 // ---------------------------------------------------------------- sync

@@ -60,8 +60,16 @@ button { cursor: pointer; color: var(--dim); }
 button:hover { color: var(--fg); }
 
 form { margin: .75rem 0; }
-#weight-form, #food-form { display: flex; gap: .4rem; }
-#weight-form input, #food-form input { flex: 1; min-width: 0; }
+#weight-form { display: flex; gap: .4rem; }
+#weight-form input { flex: 1; min-width: 0; }
+
+/* Description on its own line, then the two numbers and the two buttons.
+   Wrapping keeps the buttons usable on a narrow phone instead of crushing the
+   number fields to nothing. */
+#food-row { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; }
+#food-row input { flex: 1 1 5rem; min-width: 0; }
+#food-row button { flex: 0 0 auto; }
+#f-add { color: var(--fg); border-color: var(--fg); }
 
 h3 {
   display: flex;
@@ -132,19 +140,10 @@ li {
   padding: .4rem 0;
   border-bottom: 1px solid var(--line);
 }
-li .name { flex: 1; }
+/* The name is now the description as typed, so it can be a whole sentence. */
+li .name { flex: 1; overflow-wrap: anywhere; }
 li .macros { color: var(--dim); font-size: .85rem; white-space: nowrap; }
 li button { border: 0; background: none; padding: 0 .25rem; }
-
-#ai-form { display: flex; gap: .4rem; align-items: flex-start; }
-#ai-form textarea { flex: 1; }
-
-#review-items li { flex-wrap: wrap; }
-#review-items .r-name { flex: 1 1 100%; }
-#review-items .r-num { flex: 1 1 0; min-width: 0; }
-/* Low confidence means the model was unsure of the quantity — flag it for
-   weighing rather than silently trusting the number. */
-#review-items li.low { border-left: 2px solid var(--warn); padding-left: .5rem; }
 
 .note, .msg { color: var(--dim); font-size: .85rem; }
 .msg:empty { display: none; }

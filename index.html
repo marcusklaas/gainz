@@ -59,24 +59,17 @@
       <button>Save weight</button>
     </form>
 
-    <form id="ai-form">
-      <textarea id="ai-text" rows="2" placeholder="two eggs, toast with butter, black coffee"></textarea>
-      <button id="ai-go">Estimate</button>
-    </form>
-    <p id="ai-msg" class="msg"></p>
-
-    <div id="review" hidden>
-      <ul id="review-items"></ul>
-      <button id="review-save">Save all</button>
-      <button id="review-cancel">Discard</button>
-    </div>
-
     <form id="food-form">
-      <input id="f-name" placeholder="food" required>
-      <input id="f-kcal" type="number" min="0" placeholder="kcal" required>
-      <input id="f-protein" type="number" min="0" step="0.1" placeholder="protein g" required>
-      <button>Add</button>
+      <textarea id="f-desc" rows="3" required
+        placeholder="thick toast with oyster mushroom, salad and a bit of sauce"></textarea>
+      <div id="food-row">
+        <input id="f-kcal" type="number" min="0" placeholder="kcal" required>
+        <input id="f-protein" type="number" min="0" step="0.1" placeholder="protein g" required>
+        <button id="f-estimate" type="button">Estimate</button>
+        <button id="f-add">Add</button>
+      </div>
     </form>
+    <p id="food-msg" class="msg"></p>
 
     <ul id="items"></ul>
 

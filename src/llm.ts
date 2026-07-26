@@ -1,5 +1,9 @@
-// Free text -> itemised nutrition estimate, calling the model provider directly
-// from the browser.
+// Free text -> one calorie and protein estimate, calling the model provider
+// directly from the browser.
+//
+// One description is always one log entry. Committing to that removes the whole
+// splitting problem: no item list, no review step, no per-item editing. The
+// model fills two numbers and the user can overwrite either before saving.
 //
 // Two providers are supported. The prompt, the JSON schema, and the validation
 // are shared; only the request shape and the place the JSON ends up differ, so
@@ -8,87 +12,40 @@
 // Keys live on the user's own device and go straight to the provider. That is
 // acceptable only under the conditions agreed in PLAN.md: single user, key never
 // committed, and a hard monthly spend cap on the account.
-//
-// The estimate is never saved blind — this module only returns candidates, and
-// the review step in main.ts is what writes them.
-import type { Favorite, Provider } from "./types.js";
+import type { Provider } from "./types.js";
 
 const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/responses";
-const MAX_TOKENS = 2000;
+const MAX_TOKENS = 200;
 
-export interface ParsedItem {
-  name: string;
-  grams: number | null;
+export interface Estimated {
   kcal: number;
   protein_g: number;
-  /** "low" means the quantity was ambiguous and is worth weighing. */
-  confidence: "high" | "low";
 }
 
 const SCHEMA = {
   type: "object",
   properties: {
-    items: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          name: { type: "string", description: "Short food name, e.g. 'scrambled eggs'" },
-          grams: {
-            type: ["number", "null"],
-            description: "Portion weight in grams if determinable, otherwise null",
-          },
-          kcal: { type: "number", description: "Calories for the portion eaten, not per 100 g" },
-          protein_g: { type: "number", description: "Protein in grams for the portion eaten" },
-          confidence: {
-            type: "string",
-            enum: ["high", "low"],
-            description: "low when the quantity is ambiguous or the food varies a lot",
-          },
-        },
-        required: ["name", "grams", "kcal", "protein_g", "confidence"],
-        additionalProperties: false,
-      },
-    },
+    kcal: { type: "number", description: "Total calories for everything described" },
+    protein_g: { type: "number", description: "Total protein in grams for everything described" },
   },
-  required: ["items"],
+  required: ["kcal", "protein_g"],
   additionalProperties: false,
 };
 
-function systemPrompt(favorites: Favorite[]): string {
-  const base = [
-    "You estimate nutrition for a personal food log.",
-    "",
-    "GRANULARITY — this matters more than anything else here.",
-    "Default to ONE item for everything the user describes. Only split when the",
-    "parts are separately served things eaten alongside each other — a burger,",
-    "fries and a milkshake are three items. Never break a single dish into its",
-    "ingredients: toast with mushrooms, salad and sauce is ONE item, not four.",
-    "A sandwich is one item. A curry with rice is one item. A bowl of porridge",
-    "with fruit and honey is one item. When in doubt, combine.",
-    "",
-    "VALUES",
-    "- kcal and protein_g are for the portion actually eaten, never per 100 g.",
-    "- Give grams for the whole portion when it can be determined, otherwise null.",
-    "- Assume ordinary portion sizes when the user does not say.",
-    "- Take the user's own hints seriously: \"light\", \"not heavy on calories\",",
-    "  \"big\", \"just a bit\" should visibly move the estimate.",
-    "- Set confidence to \"low\" when the quantity is vague or the food varies a lot,",
-    "  so the user knows that item is worth weighing.",
-    "- Name the whole dish in a few words, e.g. \"toast with oyster mushroom & salad\".",
-  ].join("\n");
-
-  if (!favorites.length) return base;
-
-  // Recurring foods resolve more consistently when their known values are in
-  // context, and it keeps repeated entries from drifting between logs.
-  const list = favorites
-    .map((f) => `- ${f.name}: ${f.grams ? `${f.grams} g, ` : ""}${f.kcal} kcal, ${f.protein_g} g protein`)
-    .join("\n");
-  return `${base}\n\nFoods this user logs often, with their usual values. Prefer these when the text matches:\n${list}`;
-}
+const PROMPT = [
+  "You estimate nutrition for a personal food log.",
+  "",
+  "The user describes one entry. Return the total kcal and total protein in",
+  "grams for everything described, however many foods that turns out to be.",
+  "Never break it down and never give per-100 g values.",
+  "",
+  "- Assume ordinary portion sizes when the user does not say.",
+  "- Take the user's hints seriously: \"light\", \"not heavy on calories\", \"big\",",
+  "  \"just a bit\" should visibly move the estimate.",
+  "- A rough number is useful; refusing is not. Always give your best guess.",
+].join("\n");
 
 async function failure(res: Response): Promise<Error> {
   if (res.status === 401) return new Error("API key rejected. Check it in Settings.");
@@ -104,34 +61,10 @@ async function failure(res: Response): Promise<Error> {
   return new Error(detail || `Request failed (${res.status})`);
 }
 
-/** The model is untrusted input, so every field is checked before it is used. */
-function validate(payload: unknown): ParsedItem[] {
-  const items = (payload as { items?: unknown }).items;
-  if (!Array.isArray(items)) throw new Error("Response contained no items");
-
-  return items.map((raw, i) => {
-    const o = raw as Record<string, unknown>;
-    const kcal = Number(o["kcal"]);
-    const protein = Number(o["protein_g"]);
-    if (!Number.isFinite(kcal) || !Number.isFinite(protein)) {
-      throw new Error(`Item ${i + 1} came back without usable numbers`);
-    }
-    const grams = Number(o["grams"]);
-    return {
-      name: String(o["name"] ?? "food").slice(0, 80),
-      grams: Number.isFinite(grams) && grams > 0 ? Math.round(grams) : null,
-      kcal: Math.round(kcal),
-      protein_g: Math.round(protein * 10) / 10,
-      confidence: o["confidence"] === "low" ? "low" : "high",
-    };
-  });
-}
-
 export interface Options {
   provider: Provider;
   model: string;
   key: string;
-  favorites: Favorite[];
 }
 
 /**
@@ -154,7 +87,7 @@ async function callAnthropic(text: string, o: Options): Promise<string> {
       model: o.model,
       max_tokens: MAX_TOKENS,
       thinking: { type: "disabled" },
-      system: systemPrompt(o.favorites),
+      system: PROMPT,
       messages: [{ role: "user", content: text }],
       output_config: { format: { type: "json_schema", schema: SCHEMA } },
     }),
@@ -184,16 +117,11 @@ async function callOpenAI(text: string, o: Options): Promise<string> {
     },
     body: JSON.stringify({
       model: o.model,
-      instructions: systemPrompt(o.favorites),
+      instructions: PROMPT,
       input: text,
       max_output_tokens: MAX_TOKENS,
       text: {
-        format: {
-          type: "json_schema",
-          name: "food_items",
-          strict: true,
-          schema: SCHEMA,
-        },
+        format: { type: "json_schema", name: "estimate", strict: true, schema: SCHEMA },
       },
     }),
   });
@@ -212,16 +140,23 @@ async function callOpenAI(text: string, o: Options): Promise<string> {
   throw new Error("Response contained no text");
 }
 
-export async function parseFood(text: string, o: Options): Promise<ParsedItem[]> {
+export async function estimateFood(text: string, o: Options): Promise<Estimated> {
   const json = o.provider === "openai" ? await callOpenAI(text, o) : await callAnthropic(text, o);
 
   // Structured output should guarantee JSON, but a refusal or a truncated reply
   // would surface here as a raw parser error otherwise.
-  let payload: unknown;
+  let payload: { kcal?: unknown; protein_g?: unknown };
   try {
-    payload = JSON.parse(json);
+    payload = JSON.parse(json) as { kcal?: unknown; protein_g?: unknown };
   } catch {
     throw new Error("Could not read the estimate. Try rephrasing.");
   }
-  return validate(payload);
+
+  // The model is untrusted input, so both numbers are checked before use.
+  const kcal = Number(payload.kcal);
+  const protein = Number(payload.protein_g);
+  if (!Number.isFinite(kcal) || !Number.isFinite(protein)) {
+    throw new Error("Estimate came back without usable numbers");
+  }
+  return { kcal: Math.round(kcal), protein_g: Math.round(protein * 10) / 10 };
 }

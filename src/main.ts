@@ -3,20 +3,17 @@ import { parseWeightCsv, type WeightRow } from "./csv.js";
 import { addDays, humanDay, monthOf, nowTime, todayKey } from "./dates.js";
 import { dayKcal, dayProtein, estimate, type Estimate } from "./estimate.js";
 import { checkAccess } from "./github.js";
-import { parseFood, type ParsedItem } from "./llm.js";
+import { estimateFood } from "./llm.js";
 import { isConfigured, loadSettings, saveSettings, type Settings } from "./settings.js";
 import {
   cachedConfig,
-  cachedFavorites,
   flush,
   invalidateMonths,
   pendingWrites,
   readDay,
   readRange,
   refreshConfig,
-  refreshFavorites,
   saveConfig,
-  saveFavorites,
   updateDay,
   updateDays,
 } from "./store.js";
@@ -52,7 +49,6 @@ async function boot(): Promise<void> {
   try {
     await flush();
     const cfg = await refreshConfig();
-    await refreshFavorites();
     if (!cfg) needsConfig();
   } catch {
     // Offline is fine; cached data still renders and writes stay queued.
@@ -153,165 +149,74 @@ $("weight-form").addEventListener("submit", async (e) => {
   await sync();
 });
 
-$("food-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const item: FoodItem = {
-    id: crypto.randomUUID(),
-    at: nowTime(),
-    name: val("f-name"),
-    kcal: num("f-kcal"),
-    protein_g: num("f-protein"),
-    source: "manual",
-  };
-  await updateDay(day, (d) => {
-    d.items.push(item);
-  });
-  ($("food-form") as HTMLFormElement).reset();
-  $("f-name").focus();
-  await render();
-  await sync();
-});
+// ---------------------------------------------------------------- food entry
 
-// --------------------------------------------------------------- llm entry
+/**
+ * One description is one entry. Estimate only fills the two number fields, so
+ * the model is a convenience over the manual path rather than a separate flow
+ * with its own review step — and anything it gets wrong is fixed by typing over
+ * it before pressing Add.
+ */
 
-/** Pending estimate. Nothing here is written until Save all. */
-let candidates: ParsedItem[] = [];
-let sourceText = "";
+/** Set when the numbers currently in the boxes came from the model. */
+let estimatedBy: string | null = null;
 
-$("ai-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const text = $<HTMLTextAreaElement>("ai-text").value.trim();
-  if (!text) return;
+const desc = () => $<HTMLTextAreaElement>("f-desc").value.trim();
+
+for (const id of ["f-kcal", "f-protein"]) {
+  // Typing over an estimate makes it the user's number, not the model's.
+  $(id).addEventListener("input", () => (estimatedBy = null));
+}
+
+$("f-estimate").addEventListener("click", async () => {
+  const text = desc();
+  if (!text) return msg("food-msg", "Describe the food first.", "err");
+
+  const cfg = cachedConfig();
+  if (!cfg) return msg("food-msg", "Save your config first.", "err");
 
   const s = loadSettings();
-  const cfg = cachedConfig();
-  if (!cfg) return msg("ai-msg", "Save your config first.", "err");
-
   const provider = cfg.llm.provider;
   const key = provider === "openai" ? s?.openaiKey : s?.anthropicKey;
-  if (!key) return msg("ai-msg", `No ${provider} API key yet — add one in Settings.`, "err");
+  if (!key) return msg("food-msg", `No ${provider} API key yet — add one in Settings.`, "err");
 
-  const button = $<HTMLButtonElement>("ai-go");
+  const button = $<HTMLButtonElement>("f-estimate");
   button.disabled = true;
-  msg("ai-msg", "Estimating…");
+  msg("food-msg", "Estimating…");
   try {
-    candidates = await parseFood(text, {
-      provider,
-      model: cfg.llm.model,
-      key,
-      favorites: cachedFavorites().items,
-    });
-    msg("ai-msg", "");
-    renderReview(text);
+    const est = await estimateFood(text, { provider, model: cfg.llm.model, key });
+    $<HTMLInputElement>("f-kcal").value = String(est.kcal);
+    $<HTMLInputElement>("f-protein").value = String(est.protein_g);
+    estimatedBy = cfg.llm.model;
+    msg("food-msg", "Estimated — edit either number, then Add.", "ok");
   } catch (err) {
-    msg("ai-msg", (err as Error).message, "err");
+    msg("food-msg", (err as Error).message, "err");
   } finally {
     button.disabled = false;
   }
 });
 
-function renderReview(text: string): void {
-  sourceText = text;
-  const ul = $("review-items");
-  ul.replaceChildren();
-  candidates.forEach((item, i) => ul.append(reviewRow(item, i)));
-  $("review").hidden = candidates.length === 0;
-}
-
-function reviewRow(item: ParsedItem, i: number): HTMLLIElement {
-  const li = document.createElement("li");
-  if (item.confidence === "low") {
-    li.className = "low";
-    li.title = "Quantity was ambiguous — worth weighing this one";
-  }
-
-  const field = (cls: string, value: string, placeholder: string, on: (v: string) => void) => {
-    const el = document.createElement("input");
-    el.className = cls;
-    el.value = value;
-    el.placeholder = placeholder;
-    if (cls !== "r-name") {
-      el.type = "number";
-      el.min = "0";
-      if (cls === "r-protein") el.step = "0.1";
-    }
-    el.addEventListener("input", () => on(el.value));
-    return el;
+$("food-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const item: FoodItem = {
+    id: crypto.randomUUID(),
+    at: nowTime(),
+    name: desc(),
+    kcal: num("f-kcal"),
+    protein_g: num("f-protein"),
+    source: estimatedBy ? "llm" : "manual",
+    ...(estimatedBy ? { model: estimatedBy } : {}),
   };
-
-  li.append(
-    field("r-name", item.name, "food", (v) => (candidates[i]!.name = v)),
-    field("r-num", item.grams === null ? "" : String(item.grams), "g", (v) => {
-      candidates[i]!.grams = v ? Number(v) : null;
-    }),
-    field("r-num", String(item.kcal), "kcal", (v) => (candidates[i]!.kcal = Number(v))),
-    field("r-protein r-num", String(item.protein_g), "protein g", (v) => {
-      candidates[i]!.protein_g = Number(v);
-    }),
-  );
-
-  const fav = document.createElement("button");
-  fav.textContent = "☆";
-  fav.title = "Remember this food for next time";
-  fav.addEventListener("click", async () => {
-    const c = candidates[i]!;
-    const file = cachedFavorites();
-    file.items = [
-      ...file.items.filter((f) => f.name !== c.name),
-      { name: c.name, grams: c.grams, kcal: c.kcal, protein_g: c.protein_g },
-    ];
-    saveFavorites(file);
-    fav.textContent = "★";
-    await sync();
-  });
-
-  const del = document.createElement("button");
-  del.textContent = "×";
-  del.title = "Drop this item";
-  del.addEventListener("click", () => {
-    candidates.splice(i, 1);
-    renderReview(sourceText);
-  });
-
-  li.append(fav, del);
-  return li;
-}
-
-$("review-save").addEventListener("click", async () => {
-  if (!candidates.length) return;
-  const model = cachedConfig()?.llm.model;
-  const at = nowTime();
-
   await updateDay(day, (d) => {
-    for (const c of candidates) {
-      d.items.push({
-        id: crypto.randomUUID(),
-        at,
-        name: c.name,
-        ...(c.grams === null ? {} : { grams: c.grams }),
-        kcal: c.kcal,
-        protein_g: c.protein_g,
-        sourceText,
-        source: "llm",
-        ...(model ? { model } : {}),
-      });
-    }
+    d.items.push(item);
   });
-
-  clearReview();
+  ($("food-form") as HTMLFormElement).reset();
+  estimatedBy = null;
+  msg("food-msg", "");
+  $("f-desc").focus();
   await render();
   await sync();
 });
-
-$("review-cancel").addEventListener("click", clearReview);
-
-function clearReview(): void {
-  candidates = [];
-  sourceText = "";
-  $("review").hidden = true;
-  $("review-items").replaceChildren();
-  $<HTMLTextAreaElement>("ai-text").value = "";
-}
 
 $("f-logging").addEventListener("change", async () => {
   const v = $<HTMLSelectElement>("f-logging").value;

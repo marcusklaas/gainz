@@ -13,21 +13,24 @@ export type DayKey = string;
 /** "YYYY-MM" */
 export type MonthKey = string;
 
-export type FoodSource = "llm" | "manual" | "favorite";
+/** "llm" means the numbers came from an estimate, whether or not they were then
+ *  edited by hand. */
+export type FoodSource = "llm" | "manual";
 
 export interface FoodItem {
   id: string;
   /** "19:40", local. */
   at: string;
+  /** The description as typed. Doubles as the text the estimate was made from. */
   name: string;
-  grams?: number;
   kcal: number;
   protein_g: number;
-  /** Raw free text this was parsed from. Kept so history can be re-estimated. */
-  sourceText?: string;
   source: FoodSource;
   /** Which model produced the estimate. */
   model?: string;
+  /** Written by an earlier version that logged several items per description. */
+  grams?: number;
+  sourceText?: string;
 }
 
 export interface Day {
@@ -40,19 +43,6 @@ export interface Day {
 export interface MonthFile {
   version: 1;
   days: Record<DayKey, Day>;
-}
-
-/** A recurring food, fed to the model as context so repeats stay consistent. */
-export interface Favorite {
-  name: string;
-  grams: number | null;
-  kcal: number;
-  protein_g: number;
-}
-
-export interface FavoritesFile {
-  version: 1;
-  items: Favorite[];
 }
 
 export type GoalKind = "cut" | "maintain" | "bulk";
@@ -101,8 +91,4 @@ export function emptyDay(): Day {
 
 export function emptyMonth(): MonthFile {
   return { version: 1, days: {} };
-}
-
-export function emptyFavorites(): FavoritesFile {
-  return { version: 1, items: [] };
 }
