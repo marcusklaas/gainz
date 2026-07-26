@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gainz</title>
+<link rel="stylesheet" href="vendor/uPlot.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<section id="setup" hidden>
+  <h1>Setup</h1>
+  <p class="note">Stored on this device only. Nothing is sent anywhere except GitHub.</p>
+  <form id="setup-form">
+    <label>Owner <input id="s-owner" required autocomplete="off"></label>
+    <label>Data repo <input id="s-repo" required autocomplete="off"></label>
+    <label>Branch <input id="s-branch" value="main" required autocomplete="off"></label>
+    <label>GitHub token <input id="s-pat" type="password" required autocomplete="off"></label>
+    <button>Connect</button>
+  </form>
+  <p id="setup-msg" class="msg"></p>
+</section>
+
+<main id="app" hidden>
+  <nav>
+    <button data-screen="today">Today</button>
+    <button data-screen="trend">Trend</button>
+    <button data-screen="settings">Settings</button>
+    <span id="sync"></span>
+  </nav>
+
+  <section id="today">
+    <header>
+      <button id="prev-day" title="Previous day">&lsaquo;</button>
+      <h2 id="day-label"></h2>
+      <button id="next-day" title="Next day">&rsaquo;</button>
+    </header>
+
+    <div id="goals" hidden>
+      <h3>Protein <span id="p-nums"></span></h3>
+      <div class="bar"><i id="p-fill"></i></div>
+      <p id="p-note"></p>
+
+      <h3>Calories <span id="k-nums"></span></h3>
+      <div class="bar"><i id="k-fill"></i><i id="k-band"></i></div>
+      <p id="k-note"></p>
+    </div>
+
+    <p id="stats" class="note"></p>
+
+    <form id="weight-form">
+      <input id="f-weight" type="number" step="0.1" min="30" max="250" placeholder="weight kg">
+      <button>Save weight</button>
+    </form>
+
+    <form id="ai-form">
+      <textarea id="ai-text" rows="2" placeholder="two eggs, toast with butter, black coffee"></textarea>
+      <button id="ai-go">Estimate</button>
+    </form>
+    <p id="ai-msg" class="msg"></p>
+
+    <div id="review" hidden>
+      <ul id="review-items"></ul>
+      <button id="review-save">Save all</button>
+      <button id="review-cancel">Discard</button>
+    </div>
+
+    <form id="food-form">
+      <input id="f-name" placeholder="food" required>
+      <input id="f-kcal" type="number" min="0" placeholder="kcal" required>
+      <input id="f-protein" type="number" min="0" step="0.1" placeholder="protein g" required>
+      <button>Add</button>
+    </form>
+
+    <ul id="items"></ul>
+
+    <label>Counts toward TDEE
+      <select id="f-logging">
+        <option value="">auto</option>
+        <option value="complete">yes, fully logged</option>
+        <option value="incomplete">no, partial</option>
+      </select>
+    </label>
+  </section>
+
+  <section id="trend" hidden>
+    <h2>Trend</h2>
+    <div id="chart"></div>
+    <p id="trend-note"></p>
+    <p id="trend-basis" class="note"></p>
+    <p class="note">Drag to pan · wheel or pinch to zoom · double-click to reset</p>
+  </section>
+
+  <section id="settings" hidden>
+    <p id="config-banner" class="msg" hidden></p>
+
+    <h2>Goal</h2>
+    <form id="goal-form">
+      <label>Phase
+        <select id="g-kind">
+          <option value="cut">cut</option>
+          <option value="maintain">maintain</option>
+          <option value="bulk">bulk</option>
+        </select>
+      </label>
+      <label>Range lower (kcal from TDEE) <input id="g-lower" type="number" required></label>
+      <label>Range upper (kcal from TDEE) <input id="g-upper" type="number" required></label>
+      <label>Protein g per kg <input id="g-protein" type="number" step="0.1" required></label>
+      <label>Started <input id="g-started" type="date" required></label>
+      <label>Ends on
+        <select id="g-end-type">
+          <option value="review">review date</option>
+          <option value="weight">target weight</option>
+        </select>
+      </label>
+      <label>End value <input id="g-end-value" required></label>
+
+      <h2>Body</h2>
+      <label>Height cm <input id="b-height" type="number" required></label>
+      <label>Born (YYYY-MM) <input id="b-birth" pattern="\d{4}-\d{2}" required></label>
+      <label>Sex
+        <select id="b-sex"><option value="m">m</option><option value="f">f</option></select>
+      </label>
+      <label>Activity factor <input id="e-activity" type="number" step="0.05" required></label>
+
+      <h2>Estimator</h2>
+      <label>Level half-life days <input id="e-level" type="number" required></label>
+      <label>Trend half-life days <input id="e-trend" type="number" required></label>
+      <label>History days <input id="e-history" type="number" required></label>
+      <label>TDEE window days <input id="e-window" type="number" required></label>
+      <label>Full-confidence days <input id="e-confidence" type="number" required></label>
+      <label>Partial-day kcal fraction <input id="e-fraction" type="number" step="0.05" required></label>
+      <label>LLM provider
+        <select id="e-provider">
+          <option value="anthropic">anthropic</option>
+          <option value="openai">openai</option>
+        </select>
+      </label>
+      <label>LLM model <input id="e-model" required></label>
+
+      <button>Save config</button>
+    </form>
+    <p id="config-msg" class="msg"></p>
+
+    <h2>Import weights</h2>
+    <p class="note">Paste the CSV export. Semicolon-delimited, needs Date and Weight (kg) columns.</p>
+    <textarea id="csv" rows="4" placeholder="Date;Weekday;Weight (kg);..."></textarea>
+    <button id="csv-go">Import</button>
+    <p id="csv-msg" class="msg"></p>
+
+    <h2>Connection</h2>
+    <form id="conn-form">
+      <label>Owner <input id="c-owner" required autocomplete="off"></label>
+      <label>Data repo <input id="c-repo" required autocomplete="off"></label>
+      <label>Branch <input id="c-branch" required autocomplete="off"></label>
+      <label>GitHub token <input id="c-pat" type="password" required autocomplete="off"></label>
+      <label>Anthropic API key <input id="c-anthropic" type="password" autocomplete="off"></label>
+      <label>OpenAI API key <input id="c-openai" type="password" autocomplete="off"></label>
+      <button>Save connection</button>
+    </form>
+    <p id="conn-msg" class="msg"></p>
+  </section>
+</main>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,152 @@
+:root {
+  --fg: #e8e8e8;
+  --dim: #8a8a8a;
+  --bg: #16181c;
+  --line: #2c2f36;
+  --ok: #6bbf59;
+  --warn: #d9a441;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0 auto;
+  padding: 1rem;
+  max-width: 30rem;
+  font: 16px/1.5 system-ui, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+h1, h2 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 .5rem; }
+h1 { margin-top: 0; }
+
+nav {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: .5rem;
+}
+nav button[aria-current="true"] { color: var(--fg); border-color: var(--fg); }
+#sync { margin-left: auto; color: var(--dim); font-size: .8rem; }
+
+#today header {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+#today header h2 { flex: 1; text-align: center; margin: 0; }
+
+label {
+  display: block;
+  margin: .5rem 0;
+  color: var(--dim);
+  font-size: .85rem;
+}
+label input, label select { display: block; width: 100%; margin-top: .15rem; }
+
+input, select, textarea, button {
+  font: inherit;
+  color: var(--fg);
+  background: #1f2229;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: .45rem .6rem;
+}
+textarea { width: 100%; resize: vertical; }
+button { cursor: pointer; color: var(--dim); }
+button:hover { color: var(--fg); }
+
+form { margin: .75rem 0; }
+#weight-form, #food-form { display: flex; gap: .4rem; }
+#weight-form input, #food-form input { flex: 1; min-width: 0; }
+
+h3 {
+  display: flex;
+  margin: 1.25rem 0 .35rem;
+  font-size: .75rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+h3 span {
+  margin-left: auto;
+  color: var(--fg);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.bar {
+  position: relative;
+  height: .55rem;
+  border-radius: 3px;
+  background: #23262e;
+  overflow: hidden;
+}
+.bar i { position: absolute; top: 0; bottom: 0; }
+#p-fill, #k-fill { left: 0; background: var(--dim); }
+#p-fill.hit, #k-fill.hit { background: var(--ok); }
+#k-fill.over { background: var(--warn); }
+/* Target band, drawn over the fill so its edges stay visible in every state. */
+#k-band {
+  background: rgba(232, 232, 232, .10);
+  border-left: 1px solid var(--fg);
+  border-right: 1px solid var(--fg);
+}
+
+#goals p { margin: .35rem 0 0; font-size: .85rem; }
+#stats { margin: 1.25rem 0; }
+
+/* uPlot draws axes and grid from JS options (see chart.ts theme()); these rules
+   cover the parts it renders as DOM. touch-action is what lets drag pan the
+   chart instead of scrolling the page. */
+#chart .u-over { touch-action: none; cursor: grab; }
+#chart .u-over:active { cursor: grabbing; }
+
+/* Live legend doubles as the hover readout: date and both values at the cursor. */
+#chart .u-legend {
+  margin-top: .5rem;
+  font-size: .8rem;
+  text-align: left;
+}
+#chart .u-legend .u-series > * { padding: .1rem .5rem .1rem 0; }
+#chart .u-legend .u-series th { color: var(--dim); font-weight: 400; }
+#chart .u-legend .u-value { color: var(--fg); font-variant-numeric: tabular-nums; }
+#chart .u-legend .u-series:first-child th { color: var(--fg); }
+
+#trend-note { margin: .75rem 0 .25rem; }
+#trend-basis { margin: .25rem 0; }
+#chart .pts circle { fill: var(--dim); }
+#chart .ewma { fill: none; stroke: var(--ok); stroke-width: 1.5; }
+#chart text { fill: var(--dim); font-size: 8px; }
+
+ul { list-style: none; padding: 0; margin: 1rem 0; }
+li {
+  display: flex;
+  gap: .5rem;
+  align-items: baseline;
+  padding: .4rem 0;
+  border-bottom: 1px solid var(--line);
+}
+li .name { flex: 1; }
+li .macros { color: var(--dim); font-size: .85rem; white-space: nowrap; }
+li button { border: 0; background: none; padding: 0 .25rem; }
+
+#ai-form { display: flex; gap: .4rem; align-items: flex-start; }
+#ai-form textarea { flex: 1; }
+
+#review-items li { flex-wrap: wrap; }
+#review-items .r-name { flex: 1 1 100%; }
+#review-items .r-num { flex: 1 1 0; min-width: 0; }
+/* Low confidence means the model was unsure of the quantity — flag it for
+   weighing rather than silently trusting the number. */
+#review-items li.low { border-left: 2px solid var(--warn); padding-left: .5rem; }
+
+.note, .msg { color: var(--dim); font-size: .85rem; }
+.msg:empty { display: none; }
+.msg.ok { color: var(--ok); }
+.msg.err { color: var(--warn); }

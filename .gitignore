@@ -1,0 +1,7 @@
+node_modules/
+js/
+*.tsbuildinfo
+_site/
+.claude/settings.local.json
+PLAN.md
+spec.md

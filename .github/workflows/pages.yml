@@ -1,0 +1,51 @@
+# Builds src/ and publishes the result to GitHub Pages, served under
+# marcusklaas.nl/gainz. The compiled js/ is deliberately not committed — this is
+# the only thing that produces it, so what is live always matches src/.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; the newest push wins.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      # Copied file by file rather than uploading the repo, so the planning
+      # notes and sources stay out of the served site.
+      - name: Assemble site
+        run: |
+          mkdir _site
+          cp index.html style.css _site/
+          cp -r js vendor _site/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4
