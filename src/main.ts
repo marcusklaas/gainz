@@ -1,7 +1,7 @@
 import { drawTrend } from "./chart.js";
 import { parseWeightCsv, type WeightRow } from "./csv.js";
 import { addDays, humanDay, monthOf, nowTime, todayKey } from "./dates.js";
-import { correctedTarget, dayKcal, dayProtein, estimate, type Estimate } from "./estimate.js";
+import { dayKcal, dayProtein, estimate, type Estimate } from "./estimate.js";
 import { checkAccess } from "./github.js";
 import { estimateFood } from "./llm.js";
 import { isConfigured, loadSettings, saveSettings, type Settings } from "./settings.js";
@@ -266,13 +266,14 @@ async function render(): Promise<void> {
 }
 
 /**
- * Pins today's target the first time the day is opened, and never touches it
- * again. What the bias accumulator needs is the number the user was actually
- * shown; re-deriving it later from a better estimator would measure deviation
- * from a target that was never on screen.
+ * Pins today's goal the first time the day is opened, and never touches it
+ * again. The bias accumulator needs the number that was in force that day;
+ * re-deriving it later from more data would fabricate deviations every time
+ * the estimate moved.
  *
- * Shadow mode: the correction is logged, not applied. Two or three weeks of
- * this says whether E settles somewhere consistent or just wanders about zero.
+ * The correction itself stays out of the UI — the band moving is the whole of
+ * what the user sees. The log is here so that when it moves, there is somewhere
+ * to look and find out why.
  */
 async function recordGoal(d: Day, est: Estimate): Promise<void> {
   if (day === todayKey() && d.goal_kcal === undefined) {
@@ -283,7 +284,7 @@ async function recordGoal(d: Day, est: Estimate): Promise<void> {
   }
   console.info(
     `bias E=${round(est.bias.kcal)} over ${est.bias.days} d ·` +
-      ` target ${round(est.goalKcal)} would become ${round(correctedTarget(est))}`,
+      ` goal ${round(est.goalKcal)} shown as ${round(est.targetKcal)}`,
     est.bias.series,
   );
 }
@@ -392,7 +393,8 @@ function suggestedConfig(): Config {
     goal: {
       kind: "maintain",
       startedOn: todayKey(),
-      kcalRangeOffset: { lower: -200, upper: 200 },
+      kcalOffset: 0,
+      kcalWindow: 400,
       proteinGPerKg: 1.6,
       endCondition: { type: "review", on: addDays(todayKey(), 90) },
     },
@@ -404,6 +406,9 @@ function suggestedConfig(): Config {
       blendFullConfidenceDays: 14,
       incompleteDayKcalFraction: 0.5,
       activityFactor: 1.4,
+      biasGain: 0.3,
+      biasLeak: 0.96,
+      biasMaxKcal: 900,
     },
     llm: { provider: "anthropic", model: "claude-sonnet-5" },
   };
@@ -429,8 +434,8 @@ function fillSettingsForms(): void {
     ? { ...saved, estimator: { ...suggested.estimator, ...saved.estimator } }
     : suggested;
   $<HTMLSelectElement>("g-kind").value = c.goal.kind;
-  $<HTMLInputElement>("g-lower").value = String(c.goal.kcalRangeOffset.lower);
-  $<HTMLInputElement>("g-upper").value = String(c.goal.kcalRangeOffset.upper);
+  $<HTMLInputElement>("g-offset").value = String(c.goal.kcalOffset);
+  $<HTMLInputElement>("g-window").value = String(c.goal.kcalWindow);
   $<HTMLInputElement>("g-protein").value = String(c.goal.proteinGPerKg);
   $<HTMLInputElement>("g-started").value = c.goal.startedOn;
   $<HTMLSelectElement>("g-end-type").value = c.goal.endCondition.type;
@@ -448,6 +453,9 @@ function fillSettingsForms(): void {
   $<HTMLInputElement>("e-window").value = String(c.estimator.tdeeWindowDays);
   $<HTMLInputElement>("e-confidence").value = String(c.estimator.blendFullConfidenceDays);
   $<HTMLInputElement>("e-fraction").value = String(c.estimator.incompleteDayKcalFraction);
+  $<HTMLInputElement>("e-bias-gain").value = String(c.estimator.biasGain);
+  $<HTMLInputElement>("e-bias-leak").value = String(c.estimator.biasLeak);
+  $<HTMLInputElement>("e-bias-max").value = String(c.estimator.biasMaxKcal);
   $<HTMLSelectElement>("e-provider").value = c.llm.provider ?? "anthropic";
   $<HTMLInputElement>("e-model").value = c.llm.model;
 }
@@ -466,7 +474,8 @@ $("goal-form").addEventListener("submit", async (e) => {
     goal: {
       kind: $<HTMLSelectElement>("g-kind").value as Config["goal"]["kind"],
       startedOn: val("g-started"),
-      kcalRangeOffset: { lower: num("g-lower"), upper: num("g-upper") },
+      kcalOffset: num("g-offset"),
+      kcalWindow: num("g-window"),
       proteinGPerKg: num("g-protein"),
       endCondition:
         endType === "review"
@@ -481,6 +490,9 @@ $("goal-form").addEventListener("submit", async (e) => {
       blendFullConfidenceDays: num("e-confidence"),
       incompleteDayKcalFraction: num("e-fraction"),
       activityFactor: num("e-activity"),
+      biasGain: num("e-bias-gain"),
+      biasLeak: num("e-bias-leak"),
+      biasMaxKcal: num("e-bias-max"),
     },
     llm: {
       provider: $<HTMLSelectElement>("e-provider").value as Config["llm"]["provider"],

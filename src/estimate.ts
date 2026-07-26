@@ -126,16 +126,9 @@ export function mifflinBmr(bio: Config["bio"], kg: number, on: DayKey): number {
 // control with forgetting — shifts the whole band to compensate, without
 // narrowing it.
 //
-// Shadow mode: computed and logged, never displayed. The extra day-to-day
-// movement in the target is not free from the user's point of view, so if E
-// turns out to be noise around zero, this comes back out.
-
-/** Applied per counted day. 0.96 is a ~17-day half-life: weeks, not months. */
-const BIAS_LEAK = 0.96;
-/** Anti-windup: one holiday must not take a month to unwind. */
-const BIAS_MAX = 900;
-/** Fraction of the accumulated deviation handed back per day. */
-const BIAS_GAIN = 0.3;
+// Gain, leak and cap are config, not constants — they are the knobs worth
+// turning if the correction feels too eager or too sleepy. Setting the gain to
+// zero switches the whole thing off and shows the plain goal.
 
 const clamp = (n: number, limit: number) => Math.min(Math.max(n, -limit), limit);
 
@@ -153,26 +146,25 @@ export interface Bias {
  * as zero intake. A gap in logging says nothing about where this person lands
  * relative to their target, so it should move E neither way.
  */
-function accumulate(counted: Counted[]): Bias {
+function accumulate(counted: Counted[], e: Config["estimator"]): Bias {
   let kcal = 0;
   const series: Bias["series"] = [];
   for (const c of counted) {
     if (c.goal === undefined) continue;
-    kcal = clamp(BIAS_LEAK * kcal + (c.kcal - c.goal), BIAS_MAX);
+    kcal = clamp(e.biasLeak * kcal + (c.kcal - c.goal), e.biasMaxKcal);
     series.push({ day: c.day, kcal });
   }
   return { kcal, days: series.length, series };
 }
 
 /**
- * Today's target: the goal shifted against the accumulated bias, damped and
- * clamped so the band moves by at most its own half-width. The floor is basal
- * metabolic rate — a real physiological line rather than a picked number, and
- * the correction has no business pushing anyone below it.
+ * The goal shifted against the accumulated bias, damped by the gain and clamped
+ * so the band moves by at most its own half-width. The floor is basal metabolic
+ * rate — a real physiological line rather than a picked number, and no
+ * correction has any business pushing a target below it.
  */
-export function correctedTarget(est: Estimate): number {
-  const halfBand = (est.kcalUpper - est.kcalLower) / 2;
-  return Math.max(est.goalKcal - clamp(BIAS_GAIN * est.bias.kcal, halfBand), est.bmr);
+function correctedTarget(goal: number, half: number, bias: number, bmr: number, gain: number) {
+  return Math.max(goal - clamp(gain * bias, half), bmr);
 }
 
 interface Counted {
@@ -195,10 +187,13 @@ export interface Estimate {
   tdeeStdErr: number | null;
   countedDays: number;
   windowDays: number;
+  /** The band as displayed: the corrected target, half the window either side. */
   kcalLower: number;
   kcalUpper: number;
-  /** Midpoint of the band — the single number the day is judged against. */
+  /** The uncorrected goal. What the day's deviation is measured against. */
   goalKcal: number;
+  /** Midpoint of the displayed band. */
+  targetKcal: number;
   bias: Bias;
   proteinTarget: number;
 }
@@ -263,8 +258,13 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
   const w = measuredTdee === null ? 0 : Math.min(counted.length / e.blendFullConfidenceDays, 1);
   const tdee = w * (measuredTdee ?? 0) + (1 - w) * formulaTdee;
 
-  const kcalLower = tdee + cfg.goal.kcalRangeOffset.lower;
-  const kcalUpper = tdee + cfg.goal.kcalRangeOffset.upper;
+  // The band keeps its width; only its centre moves. The goal is what today is
+  // judged against and what gets recorded — never the shifted target, which
+  // would make the correction cancel itself out the moment it took effect.
+  const goalKcal = tdee + cfg.goal.kcalOffset;
+  const half = cfg.goal.kcalWindow / 2;
+  const bias = accumulate(forBias, e);
+  const targetKcal = correctedTarget(goalKcal, half, bias.kcal, bmr, e.biasGain);
 
   return {
     samples,
@@ -279,10 +279,11 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
       trend && w > 0 ? (w * trend.stdErrKgPerWeek * KCAL_PER_KG_FAT) / DAYS_PER_WEEK : null,
     countedDays: counted.length,
     windowDays: e.tdeeWindowDays,
-    kcalLower,
-    kcalUpper,
-    goalKcal: (kcalLower + kcalUpper) / 2,
-    bias: accumulate(forBias),
+    kcalLower: targetKcal - half,
+    kcalUpper: targetKcal + half,
+    goalKcal,
+    targetKcal,
+    bias,
     proteinTarget: trendKg * cfg.goal.proteinGPerKg,
   };
 }

@@ -185,16 +185,32 @@ export async function updateDays(days: DayKey[], fn: (d: Day, key: DayKey) => vo
 
 // ---------------------------------------------------------------- config
 
+/**
+ * The goal band used to be an asymmetric {lower, upper} pair around TDEE. Fold
+ * an older config into the offset-and-width form on the way in, so a config
+ * written by a previous version still renders until the next save rewrites it.
+ */
+function migrate(text: string): Config {
+  const c = JSON.parse(text) as Config;
+  const old = (c.goal as { kcalRangeOffset?: { lower: number; upper: number } }).kcalRangeOffset;
+  if (old) {
+    c.goal.kcalOffset = (old.lower + old.upper) / 2;
+    c.goal.kcalWindow = old.upper - old.lower;
+    delete (c.goal as { kcalRangeOffset?: unknown }).kcalRangeOffset;
+  }
+  return c;
+}
+
 export function cachedConfig(): Config | null {
   const raw = readCache(CONFIG_PATH);
-  return raw ? (JSON.parse(raw) as Config) : null;
+  return raw ? migrate(raw) : null;
 }
 
 export async function refreshConfig(): Promise<Config | null> {
   const remote = await getFile(settings(), CONFIG_PATH);
   if (!remote) return null;
   writeCache(CONFIG_PATH, remote.text);
-  return JSON.parse(remote.text) as Config;
+  return migrate(remote.text);
 }
 
 export function saveConfig(c: Config): void {

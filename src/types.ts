@@ -58,8 +58,10 @@ export type GoalKind = "cut" | "maintain" | "bulk";
 export interface Goal {
   kind: GoalKind;
   startedOn: DayKey;
-  /** Added to TDEE to give the daily calorie band. */
-  kcalRangeOffset: { lower: number; upper: number };
+  /** Added to TDEE to give the day's calorie goal. Negative cuts, positive bulks. */
+  kcalOffset: number;
+  /** Full width of the band around the goal; half of it lands on each side. */
+  kcalWindow: number;
   proteinGPerKg: number;
   endCondition:
     | { type: "review"; on: DayKey }
@@ -87,6 +89,12 @@ export interface Config {
     /** Days below this fraction of TDEE are treated as partially logged. */
     incompleteDayKcalFraction: number;
     activityFactor: number;
+    /** Fraction of the accumulated bias handed back per day. 0 disables the correction. */
+    biasGain: number;
+    /** Leak applied to the bias per counted day. 0.96 is a ~17-day half-life. */
+    biasLeak: number;
+    /** Anti-windup cap on the accumulated bias, kcal. */
+    biasMaxKcal: number;
   };
   llm: { provider: Provider; model: string };
 }

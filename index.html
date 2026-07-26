@@ -102,8 +102,8 @@
           <option value="bulk">bulk</option>
         </select>
       </label>
-      <label>Range lower (kcal from TDEE) <input id="g-lower" type="number" required></label>
-      <label>Range upper (kcal from TDEE) <input id="g-upper" type="number" required></label>
+      <label>Offset from TDEE (kcal) <input id="g-offset" type="number" required></label>
+      <label>Band width (kcal) <input id="g-window" type="number" min="0" required></label>
       <label>Protein g per kg <input id="g-protein" type="number" step="0.1" required></label>
       <label>Started <input id="g-started" type="date" required></label>
       <label>Ends on
@@ -129,6 +129,9 @@
       <label>TDEE window days <input id="e-window" type="number" required></label>
       <label>Full-confidence days <input id="e-confidence" type="number" required></label>
       <label>Partial-day kcal fraction <input id="e-fraction" type="number" step="0.05" required></label>
+      <label>Bias gain (0 turns it off) <input id="e-bias-gain" type="number" step="0.05" min="0" required></label>
+      <label>Bias leak per day <input id="e-bias-leak" type="number" step="0.01" min="0" max="1" required></label>
+      <label>Bias cap (kcal) <input id="e-bias-max" type="number" min="0" required></label>
       <label>LLM provider
         <select id="e-provider">
           <option value="anthropic">anthropic</option>
