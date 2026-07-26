@@ -220,10 +220,13 @@ function mergeDay(base: Day | undefined, local: Day, remote: Day | undefined): D
   const pick = <T>(l: T | undefined, b: T | undefined, r: T | undefined) => (l !== b ? l : r);
   const weight = pick(local.weight_kg, base?.weight_kg, remote?.weight_kg);
   const logging = pick(local.logging, base?.logging, remote?.logging);
+  // Write-once, so whichever side has it wins and the two can never disagree.
+  const goal = local.goal_kcal ?? remote?.goal_kcal;
 
   // Built in field order so the JSON diffs stay readable.
   const day = {} as Day;
   if (weight !== undefined) day.weight_kg = weight;
+  if (goal !== undefined) day.goal_kcal = goal;
   day.items = [...local.items, ...added].sort((a, b) => a.at.localeCompare(b.at));
   if (logging !== undefined) day.logging = logging;
   return day;

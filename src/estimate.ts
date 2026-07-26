@@ -118,12 +118,77 @@ export function mifflinBmr(bio: Config["bio"], kg: number, on: DayKey): number {
   );
 }
 
+// -------------------------------------------------- intake bias correction
+//
+// Landing consistently on one side of the calorie band leaves the weekly
+// average off target even though every single day was "in range". One leaky
+// accumulator of how far intake landed from that day's target — integral
+// control with forgetting — shifts the whole band to compensate, without
+// narrowing it.
+//
+// Shadow mode: computed and logged, never displayed. The extra day-to-day
+// movement in the target is not free from the user's point of view, so if E
+// turns out to be noise around zero, this comes back out.
+
+/** Applied per counted day. 0.96 is a ~17-day half-life: weeks, not months. */
+const BIAS_LEAK = 0.96;
+/** Anti-windup: one holiday must not take a month to unwind. */
+const BIAS_MAX = 900;
+/** Fraction of the accumulated deviation handed back per day. */
+const BIAS_GAIN = 0.3;
+
+const clamp = (n: number, limit: number) => Math.min(Math.max(n, -limit), limit);
+
+export interface Bias {
+  /** E, in kcal. Positive means consistently eating above target. */
+  kcal: number;
+  /** How many days went into it. */
+  days: number;
+  /** E after each day, oldest first. Shadow-mode evidence; nothing else reads it. */
+  series: { day: DayKey; kcal: number }[];
+}
+
+/**
+ * Days with no recorded target are skipped outright — not leaked, not counted
+ * as zero intake. A gap in logging says nothing about where this person lands
+ * relative to their target, so it should move E neither way.
+ */
+function accumulate(counted: Counted[]): Bias {
+  let kcal = 0;
+  const series: Bias["series"] = [];
+  for (const c of counted) {
+    if (c.goal === undefined) continue;
+    kcal = clamp(BIAS_LEAK * kcal + (c.kcal - c.goal), BIAS_MAX);
+    series.push({ day: c.day, kcal });
+  }
+  return { kcal, days: series.length, series };
+}
+
+/**
+ * Today's target: the goal shifted against the accumulated bias, damped and
+ * clamped so the band moves by at most its own half-width. The floor is basal
+ * metabolic rate — a real physiological line rather than a picked number, and
+ * the correction has no business pushing anyone below it.
+ */
+export function correctedTarget(est: Estimate): number {
+  const halfBand = (est.kcalUpper - est.kcalLower) / 2;
+  return Math.max(est.goalKcal - clamp(BIAS_GAIN * est.bias.kcal, halfBand), est.bmr);
+}
+
+interface Counted {
+  day: DayKey;
+  kcal: number;
+  /** The target displayed that day. Undefined before the feature existed. */
+  goal: number | undefined;
+}
+
 export interface Estimate {
   samples: Sample[];
   /** Smoothed weight, one point per weigh-in. */
   trendLine: Sample[];
   trendKg: number;
   trend: Trend | null;
+  bmr: number;
   formulaTdee: number;
   measuredTdee: number | null;
   tdee: number;
@@ -132,7 +197,21 @@ export interface Estimate {
   windowDays: number;
   kcalLower: number;
   kcalUpper: number;
+  /** Midpoint of the band — the single number the day is judged against. */
+  goalKcal: number;
+  bias: Bias;
   proteinTarget: number;
+}
+
+/**
+ * Intake for a day that can be taken at face value, or null if the day is
+ * missing, marked incomplete, or too light to be a full day's logging.
+ */
+function countedKcal(day: Day | undefined, floor: number): number | null {
+  if (!day?.items.length || day.logging === "incomplete") return null;
+  const kcal = dayKcal(day);
+  if (day.logging !== "complete" && kcal < floor) return null;
+  return kcal;
 }
 
 /** Null until at least one weight exists — there is no basis for a target without it. */
@@ -145,7 +224,8 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
 
   const from = addDays(today, -e.tdeeWindowDays);
   const trend = regress(samples.filter((s) => s.day >= from));
-  const formulaTdee = mifflinBmr(cfg.bio, trendKg, today) * e.activityFactor;
+  const bmr = mifflinBmr(cfg.bio, trendKg, today);
+  const formulaTdee = bmr * e.activityFactor;
 
   // Partial-day detection anchors on the formula TDEE rather than the measured
   // one. Anchoring on measured would be a feedback loop: under-logging lowers
@@ -153,13 +233,21 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
   const floor = e.incompleteDayKcalFraction * formulaTdee;
 
   // Today is excluded — a day in progress would drag the average down hard.
+  // It also gives the bias accumulator the property it needs for free: today's
+  // target is built from complete days only, so logging food cannot move it.
   const counted: number[] = [];
   for (let d = from; d < today; d = addDays(d, 1)) {
-    const day = days.get(d);
-    if (!day?.items.length || day.logging === "incomplete") continue;
-    const kcal = dayKcal(day);
-    if (day.logging !== "complete" && kcal < floor) continue;
-    counted.push(kcal);
+    const kcal = countedKcal(days.get(d), floor);
+    if (kcal !== null) counted.push(kcal);
+  }
+
+  // The bias fold runs over the whole loaded history rather than the TDEE
+  // window: with a ~17-day half-life, a 21-day fold would still be climbing out
+  // of its zero start when it reported a number.
+  const forBias: Counted[] = [];
+  for (const d of [...days.keys()].sort()) {
+    const kcal = d < today ? countedKcal(days.get(d), floor) : null;
+    if (kcal !== null) forBias.push({ day: d, kcal, goal: days.get(d)!.goal_kcal });
   }
 
   const avgIntake = counted.length
@@ -175,11 +263,15 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
   const w = measuredTdee === null ? 0 : Math.min(counted.length / e.blendFullConfidenceDays, 1);
   const tdee = w * (measuredTdee ?? 0) + (1 - w) * formulaTdee;
 
+  const kcalLower = tdee + cfg.goal.kcalRangeOffset.lower;
+  const kcalUpper = tdee + cfg.goal.kcalRangeOffset.upper;
+
   return {
     samples,
     trendLine,
     trendKg,
     trend,
+    bmr,
     formulaTdee,
     measuredTdee,
     tdee,
@@ -187,8 +279,10 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
       trend && w > 0 ? (w * trend.stdErrKgPerWeek * KCAL_PER_KG_FAT) / DAYS_PER_WEEK : null,
     countedDays: counted.length,
     windowDays: e.tdeeWindowDays,
-    kcalLower: tdee + cfg.goal.kcalRangeOffset.lower,
-    kcalUpper: tdee + cfg.goal.kcalRangeOffset.upper,
+    kcalLower,
+    kcalUpper,
+    goalKcal: (kcalLower + kcalUpper) / 2,
+    bias: accumulate(forBias),
     proteinTarget: trendKg * cfg.goal.proteinGPerKg,
   };
 }

@@ -35,6 +35,14 @@ export interface FoodItem {
 
 export interface Day {
   weight_kg?: number;
+  /**
+   * The calorie target the app actually displayed on this day, written once and
+   * never revised. The bias accumulator measures how far intake landed from what
+   * the user was told, so it has to read the number they saw — not one re-derived
+   * later from more data. Absent on days that predate the feature, or that were
+   * logged without opening the app that day.
+   */
+  goal_kcal?: number;
   items: FoodItem[];
   /** Override for the auto-classifier. Absent means "decide automatically". */
   logging?: "complete" | "incomplete";

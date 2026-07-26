@@ -1,7 +1,7 @@
 import { drawTrend } from "./chart.js";
 import { parseWeightCsv, type WeightRow } from "./csv.js";
 import { addDays, humanDay, monthOf, nowTime, todayKey } from "./dates.js";
-import { dayKcal, dayProtein, estimate, type Estimate } from "./estimate.js";
+import { correctedTarget, dayKcal, dayProtein, estimate, type Estimate } from "./estimate.js";
 import { checkAccess } from "./github.js";
 import { estimateFood } from "./llm.js";
 import { isConfigured, loadSettings, saveSettings, type Settings } from "./settings.js";
@@ -260,7 +260,32 @@ async function render(): Promise<void> {
     ` ${e.trendHalfLifeDays}-day trend half-life.`;
 
   const history = await readRange(addDays(day, -e.historyDays), day);
-  renderGoals(d, estimate(cfg, history, day));
+  const est = estimate(cfg, history, day);
+  if (est) await recordGoal(d, est);
+  renderGoals(d, est);
+}
+
+/**
+ * Pins today's target the first time the day is opened, and never touches it
+ * again. What the bias accumulator needs is the number the user was actually
+ * shown; re-deriving it later from a better estimator would measure deviation
+ * from a target that was never on screen.
+ *
+ * Shadow mode: the correction is logged, not applied. Two or three weeks of
+ * this says whether E settles somewhere consistent or just wanders about zero.
+ */
+async function recordGoal(d: Day, est: Estimate): Promise<void> {
+  if (day === todayKey() && d.goal_kcal === undefined) {
+    d.goal_kcal = Math.round(est.goalKcal);
+    await updateDay(day, (x) => {
+      x.goal_kcal ??= d.goal_kcal;
+    });
+  }
+  console.info(
+    `bias E=${round(est.bias.kcal)} over ${est.bias.days} d ·` +
+      ` target ${round(est.goalKcal)} would become ${round(correctedTarget(est))}`,
+    est.bias.series,
+  );
 }
 
 const round = (n: number) => String(Math.round(n));
