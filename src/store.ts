@@ -4,10 +4,14 @@
 // for sync. Logging on mobile with poor signal is the normal case, so this is
 // the only write path in the app.
 //
-// Conflicts resolve per day. The outbox records which day keys changed locally;
-// on flush we re-read the remote month, overwrite just those days, and PUT.
-// Two devices editing different days both survive; the same day is last-write-
-// wins, which is the right trade for one user with a phone and a laptop.
+// Conflicts resolve per item, not per day. The outbox records which day keys
+// changed locally; on flush we re-read the remote month and three-way merge
+// each dirty day against the last state we know the server had. Two devices
+// adding food to the same day both keep their items.
+//
+// Reads pull from the server once per month per session and fall back to the
+// cache when that fails. localStorage is an offline fallback, never the source
+// of truth — treating it as the latter is what let two devices drift apart.
 import { getFile, putFile } from "./github.js";
 import { loadSettings, type Settings } from "./settings.js";
 import { addDays, monthOf } from "./dates.js";
@@ -25,6 +29,9 @@ import {
 
 const CACHE = "gainz.cache.";
 const OUTBOX = "gainz.outbox";
+/** Last state we know the server had, kept so merges can tell a local deletion
+ *  apart from an item another device just added. */
+const BASE = "gainz.base.";
 
 /** path -> changed day keys, or null meaning "replace the whole file". */
 type Outbox = Record<string, DayKey[] | null>;
@@ -48,6 +55,15 @@ function readCache(path: string): string | null {
 
 function writeCache(path: string, text: string): void {
   localStorage.setItem(CACHE + path, text);
+}
+
+function readBase(path: string): MonthFile | null {
+  const raw = localStorage.getItem(BASE + path);
+  return raw ? (JSON.parse(raw) as MonthFile) : null;
+}
+
+function writeBase(path: string, text: string): void {
+  localStorage.setItem(BASE + path, text);
 }
 
 function readOutbox(): Outbox {
@@ -80,9 +96,10 @@ export function pendingWrites(): number {
 
 async function fetchMonth(m: MonthKey): Promise<MonthFile> {
   const remote = await getFile(settings(), monthPath(m));
-  const file = remote ? (JSON.parse(remote.text) as MonthFile) : emptyMonth();
-  writeCache(monthPath(m), JSON.stringify(file));
-  return file;
+  const text = remote ? remote.text : JSON.stringify(emptyMonth());
+  writeCache(monthPath(m), text);
+  writeBase(monthPath(m), text);
+  return JSON.parse(text) as MonthFile;
 }
 
 function cachedMonth(m: MonthKey): MonthFile | null {
@@ -90,15 +107,33 @@ function cachedMonth(m: MonthKey): MonthFile | null {
   return raw ? (JSON.parse(raw) as MonthFile) : null;
 }
 
-/** Cache first. Falls back to an empty month when offline and never fetched. */
+/** Months already pulled from the server during this page session. */
+const fetched = new Set<MonthKey>();
+
+/**
+ * Forces the next read of these months to go to the server. Called when the app
+ * regains focus, which is the moment another device's changes should appear.
+ */
+export function invalidateMonths(...months: MonthKey[]): void {
+  for (const m of months) fetched.delete(m);
+}
+
+/**
+ * Server first, once per month per session, then cached. Fetching on first use
+ * also means a write is applied to fresh state rather than to whatever this
+ * device happened to have cached.
+ */
 export async function readMonth(m: MonthKey): Promise<MonthFile> {
-  const cached = cachedMonth(m);
-  if (cached) return cached;
-  try {
-    return await fetchMonth(m);
-  } catch {
-    return emptyMonth();
+  if (!fetched.has(m)) {
+    try {
+      const file = await fetchMonth(m);
+      fetched.add(m);
+      return file;
+    } catch {
+      // Offline, or the token is unhappy. The cache below still renders.
+    }
   }
+  return cachedMonth(m) ?? emptyMonth();
 }
 
 export async function readDay(day: DayKey): Promise<Day> {
@@ -189,6 +224,31 @@ export function saveFavorites(f: FavoritesFile): void {
 
 // ---------------------------------------------------------------- sync
 
+/**
+ * Three-way merge of a single day. The base is the last state we know the
+ * server had; without it a locally deleted item is indistinguishable from one
+ * the other device just added, and one of the two behaves wrongly.
+ */
+function mergeDay(base: Day | undefined, local: Day, remote: Day | undefined): Day {
+  const known = new Set((base?.items ?? []).map((i) => i.id));
+  const mine = new Set(local.items.map((i) => i.id));
+  // Remote items we have never seen are the other device's additions. Anything
+  // remote that we did know about but no longer hold was deleted here.
+  const added = (remote?.items ?? []).filter((i) => !known.has(i.id) && !mine.has(i.id));
+
+  // A scalar edited here wins; otherwise defer to the server.
+  const pick = <T>(l: T | undefined, b: T | undefined, r: T | undefined) => (l !== b ? l : r);
+  const weight = pick(local.weight_kg, base?.weight_kg, remote?.weight_kg);
+  const logging = pick(local.logging, base?.logging, remote?.logging);
+
+  // Built in field order so the JSON diffs stay readable.
+  const day = {} as Day;
+  if (weight !== undefined) day.weight_kg = weight;
+  day.items = [...local.items, ...added].sort((a, b) => a.at.localeCompare(b.at));
+  if (logging !== undefined) day.logging = logging;
+  return day;
+}
+
 async function flushPath(path: string, dirtyDays: DayKey[] | null): Promise<void> {
   const localText = readCache(path);
   if (localText === null) return;
@@ -201,10 +261,11 @@ async function flushPath(path: string, dirtyDays: DayKey[] | null): Promise<void
       text = localText;
     } else {
       const local = JSON.parse(localText) as MonthFile;
+      const base = readBase(path);
       const merged = remote ? (JSON.parse(remote.text) as MonthFile) : emptyMonth();
       for (const day of dirtyDays) {
         const value = local.days[day];
-        if (value) merged.days[day] = value;
+        if (value) merged.days[day] = mergeDay(base?.days[day], value, merged.days[day]);
         else delete merged.days[day];
       }
       merged.days = Object.fromEntries(Object.entries(merged.days).sort(([a], [b]) => a.localeCompare(b)));
@@ -214,6 +275,9 @@ async function flushPath(path: string, dirtyDays: DayKey[] | null): Promise<void
 
     try {
       await putFile(settings(), path, text, remote?.sha ?? null, `update ${path}`);
+      // What we just pushed is now the agreed state, so it becomes the base for
+      // the next merge.
+      writeBase(path, text);
       return;
     } catch (e) {
       const status = (e as { status?: number }).status;

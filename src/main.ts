@@ -9,6 +9,7 @@ import {
   cachedConfig,
   cachedFavorites,
   flush,
+  invalidateMonths,
   pendingWrites,
   readDay,
   readRange,
@@ -615,6 +616,21 @@ $("csv-go").addEventListener("click", async () => {
 // -------------------------------------------------------------------- start
 
 addEventListener("online", () => void sync());
+
+/**
+ * Returning to the app is when another device's changes should show up. Only
+ * the months on screen are re-read: older ones do not change in practice, and
+ * on a phone every extra request is a visible delay.
+ */
+async function refresh(): Promise<void> {
+  invalidateMonths(monthOf(day), monthOf(todayKey()));
+  await sync();
+  await render();
+}
+
+addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void refresh();
+});
 
 // The path is relative, so the worker registers at whatever prefix the app is
 // served from and its scope covers exactly the app. Failure is ignored: offline
