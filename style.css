@@ -115,12 +115,22 @@ h3 span {
 #chart .u-over { touch-action: none; cursor: grab; }
 #chart .u-over:active { cursor: grabbing; }
 
-/* Live legend doubles as the hover readout: date and both values at the cursor. */
+/* uPlot sizes its root to min-content, which lets the legend widen the whole
+   chart. Pinning it to the container keeps both to the same width. */
+#chart .uplot { width: 100%; }
+
+/* Live legend doubles as the hover readout: date and both values at the cursor.
+   The legend is a table whose columns auto-size to their contents, so without
+   table-layout: fixed every column reflows as the cursor moves and the readout
+   shuffles sideways. Fixed columns plus tabular figures hold it still. */
 #chart .u-legend {
+  table-layout: fixed;
+  width: 100%;
   margin-top: .5rem;
   font-size: .8rem;
   text-align: left;
 }
+#chart .u-legend th { width: 5.5rem; }
 #chart .u-legend .u-series > * { padding: .1rem .5rem .1rem 0; }
 #chart .u-legend .u-series th { color: var(--dim); font-weight: 400; }
 #chart .u-legend .u-value { color: var(--fg); font-variant-numeric: tabular-nums; }

@@ -10,13 +10,29 @@ import { parseDay } from "./dates.js";
 import type { Sample } from "./estimate.js";
 
 const HEIGHT = 240;
+const DAY_SECONDS = 86_400;
+
+/**
+ * How much history the chart opens on. Recent enough that day-to-day movement
+ * is legible, long enough that the trend line means something. Everything older
+ * is still there — zoom or pan out to reach it.
+ */
+const DEFAULT_SPAN_DAYS = 21;
 
 /** Local midnight as unix seconds — uPlot's native x unit. */
 const toX = (s: Sample) => parseDay(s.day).getTime() / 1000;
 
 let plot: uPlot | null = null;
-/** Full data extent, so pan/zoom can be clamped and reset to it. */
+/** Full data extent, so pan/zoom can be clamped to it. */
 let bounds = { min: 0, max: 0 };
+
+/** The window the chart opens at and returns to on double-click. */
+function defaultView(): { min: number; max: number } {
+  return {
+    min: Math.max(bounds.max - DEFAULT_SPAN_DAYS * DAY_SECONDS, bounds.min),
+    max: bounds.max,
+  };
+}
 
 /**
  * Wheel and pinch to zoom, drag to pan, double-click to reset. Replaces uPlot's
@@ -30,7 +46,7 @@ function panZoom(): uPlot.Plugin {
 
         /** Keeps the view inside the data and never narrower than a day. */
         const clamp = (min: number, max: number) => {
-          const span = Math.min(Math.max(max - min, 86_400), bounds.max - bounds.min);
+          const span = Math.min(Math.max(max - min, DAY_SECONDS), bounds.max - bounds.min);
           if (min < bounds.min) return { min: bounds.min, max: bounds.min + span };
           if (max > bounds.max) return { min: bounds.max - span, max: bounds.max };
           return { min, max };
@@ -109,7 +125,7 @@ function panZoom(): uPlot.Plugin {
         over.addEventListener("pointerup", release);
         over.addEventListener("pointercancel", release);
 
-        over.addEventListener("dblclick", () => u.setScale("x", { ...bounds }));
+        over.addEventListener("dblclick", () => u.setScale("x", defaultView()));
       },
     },
   };
@@ -192,13 +208,16 @@ export function drawTrend(el: HTMLElement, samples: Sample[], ewma: Sample[]): v
   if (!width) return; // container still hidden; caller redraws on show
 
   if (plot) {
+    // setData re-ranges x to the full extent, so the view has to be reapplied.
     plot.setData(data);
     plot.setSize({ width, height: HEIGHT });
+    plot.setScale("x", defaultView());
     return;
   }
 
   el.replaceChildren();
   plot = new uPlot(options(width), data, el);
+  plot.setScale("x", defaultView());
 
   new ResizeObserver(() => {
     if (plot && el.clientWidth) plot.setSize({ width: el.clientWidth, height: HEIGHT });
