@@ -13,10 +13,6 @@ export type DayKey = string;
 /** "YYYY-MM" */
 export type MonthKey = string;
 
-/** "llm" means the numbers came from an estimate, whether or not they were then
- *  edited by hand. */
-export type FoodSource = "llm" | "manual";
-
 export interface FoodItem {
   id: string;
   /** "19:40", local. */
@@ -25,12 +21,16 @@ export interface FoodItem {
   name: string;
   kcal: number;
   protein_g: number;
-  source: FoodSource;
-  /** Which model produced the estimate. */
+  /**
+   * Which model produced the numbers, absent when they were typed by hand —
+   * which is the whole of the provenance. There was a separate "llm" | "manual"
+   * field alongside this saying the same thing, and nothing read it.
+   *
+   * Older files carry that field, plus grams and sourceText from a version that
+   * logged several items per description. None are declared here because none
+   * are read; they survive on disk regardless, since merges copy whole items.
+   */
   model?: string;
-  /** Written by an earlier version that logged several items per description. */
-  grams?: number;
-  sourceText?: string;
 }
 
 export interface Day {

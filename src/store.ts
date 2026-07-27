@@ -12,6 +12,7 @@
 // Reads pull from the server once per month per session and fall back to the
 // cache when that fails. localStorage is an offline fallback, never the source
 // of truth — treating it as the latter is what let two devices drift apart.
+import { withDefaults } from "./config.js";
 import { getFile, putFile } from "./github.js";
 import { loadSettings, type Settings } from "./settings.js";
 import { addDays, monthOf } from "./dates.js";
@@ -196,7 +197,7 @@ export async function readRange(from: DayKey, to: DayKey, src: Source = "server"
   return out;
 }
 
-export async function updateDay(day: DayKey, fn: (d: Day) => void): Promise<Day> {
+export async function updateDay(day: DayKey, fn: (d: Day) => void): Promise<void> {
   const m = monthOf(day);
   const month = await readMonth(m);
   const current = month.days[day] ?? emptyDay();
@@ -204,34 +205,17 @@ export async function updateDay(day: DayKey, fn: (d: Day) => void): Promise<Day>
   month.days[day] = current;
   writeCache(monthPath(m), JSON.stringify(month));
   markDirty(monthPath(m), day);
-  return current;
-}
-
-/** Bulk day writes (CSV import). One dirty mark per touched day. */
-export async function updateDays(days: DayKey[], fn: (d: Day, key: DayKey) => void): Promise<void> {
-  const byMonth = new Map<MonthKey, DayKey[]>();
-  for (const d of days) {
-    const list = byMonth.get(monthOf(d)) ?? [];
-    list.push(d);
-    byMonth.set(monthOf(d), list);
-  }
-  for (const [m, keys] of byMonth) {
-    const month = await readMonth(m);
-    for (const key of keys) {
-      const day = month.days[key] ?? emptyDay();
-      fn(day, key);
-      month.days[key] = day;
-      markDirty(monthPath(m), key);
-    }
-    writeCache(monthPath(m), JSON.stringify(month));
-  }
 }
 
 // ---------------------------------------------------------------- config
 
+/**
+ * Null only when there is no config at all. Anything that is there is merged
+ * over the defaults on the way out, so callers never see a missing key.
+ */
 export function cachedConfig(): Config | null {
   const raw = readCache(CONFIG_PATH);
-  return raw ? (JSON.parse(raw) as Config) : null;
+  return raw ? withDefaults(JSON.parse(raw)) : null;
 }
 
 export async function refreshConfig(): Promise<Config | null> {
@@ -240,7 +224,7 @@ export async function refreshConfig(): Promise<Config | null> {
   if (remote.kind === "unchanged") return cachedConfig();
   writeCache(CONFIG_PATH, remote.text);
   writeEtag(CONFIG_PATH, remote.etag);
-  return JSON.parse(remote.text) as Config;
+  return withDefaults(JSON.parse(remote.text));
 }
 
 export function saveConfig(c: Config): void {

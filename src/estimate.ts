@@ -19,9 +19,6 @@ export interface Sample {
 export interface Trend {
   kgPerWeek: number;
   stdErrKgPerWeek: number;
-  /** Fitted line is interceptKg + (kgPerWeek / 7) * days since origin. */
-  origin: DayKey;
-  interceptKg: number;
 }
 
 export const dayKcal = (d: Day): number => d.items.reduce((n, i) => n + i.kcal, 0);
@@ -101,8 +98,6 @@ export function regress(samples: Sample[]): Trend | null {
   return {
     kgPerWeek: slope * DAYS_PER_WEEK,
     stdErrKgPerWeek: Math.sqrt(sse / (n - 2) / sxx) * DAYS_PER_WEEK,
-    origin,
-    interceptKg: intercept,
   };
 }
 
@@ -137,8 +132,6 @@ export interface Bias {
   kcal: number;
   /** How many days went into it. */
   days: number;
-  /** E after each day, oldest first. Shadow-mode evidence; nothing else reads it. */
-  series: { day: DayKey; kcal: number }[];
 }
 
 /**
@@ -148,13 +141,13 @@ export interface Bias {
  */
 function accumulate(counted: Counted[], e: Config["estimator"]): Bias {
   let kcal = 0;
-  const series: Bias["series"] = [];
+  let days = 0;
   for (const c of counted) {
     if (c.goal === undefined) continue;
     kcal = clamp(e.biasLeak * kcal + (c.kcal - c.goal), e.biasMaxKcal);
-    series.push({ day: c.day, kcal });
+    days++;
   }
-  return { kcal, days: series.length, series };
+  return { kcal, days };
 }
 
 /**
@@ -180,9 +173,6 @@ export interface Estimate {
   trendLine: Sample[];
   trendKg: number;
   trend: Trend | null;
-  bmr: number;
-  formulaTdee: number;
-  measuredTdee: number | null;
   tdee: number;
   tdeeStdErr: number | null;
   countedDays: number;
@@ -225,23 +215,21 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
   // progress would drag the average down hard. It also gives the bias
   // accumulator the property it needs for free: today's target is built from
   // earlier days only, so logging food cannot move it.
-  const counted: number[] = [];
-  for (let d = from; d < today; d = addDays(d, 1)) {
-    const kcal = countedKcal(days.get(d));
-    if (kcal !== null) counted.push(kcal);
-  }
-
-  // The bias fold runs over the whole loaded history rather than the TDEE
-  // window: with a ~17-day half-life, a 21-day fold would still be climbing out
-  // of its zero start when it reported a number.
-  const forBias: Counted[] = [];
+  //
+  // One pass, oldest first, over every day that counts. The bias fold wants all
+  // of it — with a ~17-day half-life a 21-day fold would still be climbing out
+  // of its zero start when it reported a number — and the TDEE window is that
+  // same list from `from` onwards.
+  const counted: Counted[] = [];
   for (const d of [...days.keys()].sort()) {
-    const kcal = d < today ? countedKcal(days.get(d)) : null;
-    if (kcal !== null) forBias.push({ day: d, kcal, goal: days.get(d)!.goal_kcal });
+    if (d >= today) continue;
+    const kcal = countedKcal(days.get(d));
+    if (kcal !== null) counted.push({ day: d, kcal, goal: days.get(d)!.goal_kcal });
   }
+  const inWindow = counted.filter((c) => c.day >= from);
 
-  const avgIntake = counted.length
-    ? counted.reduce((a, b) => a + b, 0) / counted.length
+  const avgIntake = inWindow.length
+    ? inWindow.reduce((a, c) => a + c.kcal, 0) / inWindow.length
     : null;
   const measuredTdee =
     avgIntake !== null && trend
@@ -250,7 +238,7 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
 
   // Blend toward the measured value as logged days accumulate. Covers the cold
   // start, vacations, and any stretch of poor logging.
-  const w = measuredTdee === null ? 0 : Math.min(counted.length / e.blendFullConfidenceDays, 1);
+  const w = measuredTdee === null ? 0 : Math.min(inWindow.length / e.blendFullConfidenceDays, 1);
   const tdee = w * (measuredTdee ?? 0) + (1 - w) * formulaTdee;
 
   // The band keeps its width; only its centre moves. The goal is what today is
@@ -258,7 +246,7 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
   // would make the correction cancel itself out the moment it took effect.
   const goalKcal = tdee + cfg.goal.kcalOffset;
   const half = cfg.goal.kcalWindow / 2;
-  const bias = accumulate(forBias, e);
+  const bias = accumulate(counted, e);
   const targetKcal = correctedTarget(goalKcal, half, bias.kcal, bmr, e.biasGain);
 
   return {
@@ -266,13 +254,10 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
     trendLine,
     trendKg,
     trend,
-    bmr,
-    formulaTdee,
-    measuredTdee,
     tdee,
     tdeeStdErr:
       trend && w > 0 ? (w * trend.stdErrKgPerWeek * KCAL_PER_KG_FAT) / DAYS_PER_WEEK : null,
-    countedDays: counted.length,
+    countedDays: inWindow.length,
     windowDays: e.tdeeWindowDays,
     kcalLower: targetKcal - half,
     kcalUpper: targetKcal + half,

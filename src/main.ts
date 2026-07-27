@@ -1,9 +1,9 @@
-import { parseWeightCsv, type WeightRow } from "./csv.js";
+import { at, defaultConfig, FIELDS, put, withDefaults } from "./config.js";
 import { addDays, humanDay, monthOf, nowTime, todayKey } from "./dates.js";
 import { dayKcal, dayProtein, estimate, type Estimate } from "./estimate.js";
 import { checkAccess } from "./github.js";
 import { estimateFood } from "./llm.js";
-import { defaultNotifications, notificationsOf, requestReminders, updatePlan } from "./notify.js";
+import { requestReminders, updatePlan } from "./notify.js";
 import {
   isConfigured,
   loadSettings,
@@ -23,7 +23,6 @@ import {
   saveConfig,
   type Source,
   updateDay,
-  updateDays,
 } from "./store.js";
 import type { Config, Day, FoodItem } from "./types.js";
 
@@ -139,6 +138,16 @@ async function sync(): Promise<void> {
   syncStatus();
 }
 
+/**
+ * Every change to the day on screen goes through here. Write, redraw, push — in
+ * that order, and the push last because it is the only step allowed to fail.
+ */
+async function commit(fn: (d: Day) => void): Promise<void> {
+  await updateDay(day, fn);
+  await render();
+  await sync();
+}
+
 // ------------------------------------------------------------------- setup
 
 $("setup-form").addEventListener("submit", async (e) => {
@@ -180,11 +189,9 @@ $("weight-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const kg = num("f-weight");
   if (!kg) return;
-  await updateDay(day, (d) => {
+  await commit((d) => {
     d.weight_kg = kg;
   });
-  await render();
-  await sync();
 });
 
 // ---------------------------------------------------------------- food entry
@@ -242,28 +249,23 @@ $("food-form").addEventListener("submit", async (e) => {
     name: desc(),
     kcal: num("f-kcal"),
     protein_g: num("f-protein"),
-    source: estimatedBy ? "llm" : "manual",
     ...(estimatedBy ? { model: estimatedBy } : {}),
   };
-  await updateDay(day, (d) => {
-    d.items.push(item);
-  });
   ($("food-form") as HTMLFormElement).reset();
   estimatedBy = null;
   msg("food-msg", "");
   $("f-desc").focus();
-  await render();
-  await sync();
+  await commit((d) => {
+    d.items.push(item);
+  });
 });
 
 $("f-logging").addEventListener("change", async () => {
   const on = $<HTMLInputElement>("f-logging").checked;
-  await updateDay(day, (d) => {
+  await commit((d) => {
     if (on) d.logging = "complete";
     else delete d.logging;
   });
-  await render();
-  await sync();
 });
 
 /** Detached from render(), so a failure here cannot surface as an unhandled rejection. */
@@ -277,15 +279,11 @@ async function planReminders(cfg: Config | null, d: Day, src: Source): Promise<v
 
 async function render(src: Source = "server"): Promise<void> {
   const cfg = cachedConfig();
-  const missing = cfg ? missingNumbers(cfg) : [];
 
   // Started before the first await so that the month holding the day on screen
   // and the months behind the estimator window go out together. readMonth
   // collapses the overlap between the two into one request.
-  const history =
-    cfg && !missing.length
-      ? readRange(addDays(day, -cfg.estimator.historyDays), day, src)
-      : null;
+  const history = cfg ? readRange(addDays(day, -cfg.estimator.historyDays), day, src) : null;
 
   const d = await readDay(day, src);
   $("day-label").textContent = humanDay(day);
@@ -300,16 +298,6 @@ async function render(src: Source = "server"): Promise<void> {
   // read, and nothing on screen waits on the answer.
   void planReminders(cfg, d, src);
   if (!cfg) return;
-
-  if (missing.length) {
-    const note = `Open Settings and press Save config — missing ${missing.join(", ")}.`;
-    $("goals").hidden = true;
-    $("chart").innerHTML = "";
-    $("stats").textContent = note;
-    $("trend-note").textContent = note;
-    return;
-  }
-  $("goals").hidden = false;
 
   const e = cfg.estimator;
   $("trend-basis").textContent =
@@ -345,29 +333,10 @@ async function recordGoal(d: Day, est: Estimate): Promise<void> {
   console.info(
     `bias E=${round(est.bias.kcal)} over ${est.bias.days} d ·` +
       ` goal ${round(est.goalKcal)} shown as ${round(est.targetKcal)}`,
-    est.bias.series,
   );
 }
 
 const round = (n: number) => String(Math.round(n));
-
-/**
- * Settings a config predating them reads back as undefined, which would poison
- * every derived number in silence. Name the gap instead of degrading — one Save
- * in Settings fills them, since the form falls back to the suggested values.
- * There is no migration code anywhere: this is what stands in for it.
- */
-function missingNumbers(cfg: Config): string[] {
-  const suggested = suggestedConfig();
-  const out: string[] = [];
-  for (const section of ["goal", "estimator"] as const) {
-    for (const [key, value] of Object.entries(suggested[section])) {
-      if (typeof value !== "number") continue;
-      if (!Number.isFinite((cfg[section] as unknown as Record<string, number>)[key])) out.push(key);
-    }
-  }
-  return out;
-}
 
 const DASH = "—";
 
@@ -402,7 +371,7 @@ function renderGoals(d: Day, est: Estimate | null): void {
   if (!est) {
     resetGoals();
     $("stats").textContent = "Log a weight to get targets.";
-    $("trend-note").textContent = "No weigh-ins yet. Import the CSV in Settings.";
+    $("trend-note").textContent = "No weigh-ins yet. Save one on Today to get started.";
     return;
   }
   $("goals").classList.remove("pending");
@@ -466,13 +435,11 @@ function renderItems(d: Day): void {
     const del = document.createElement("button");
     del.textContent = "×";
     del.title = "Delete";
-    del.addEventListener("click", async () => {
-      await updateDay(day, (x) => {
+    del.addEventListener("click", () =>
+      commit((x) => {
         x.items = x.items.filter((i) => i.id !== item.id);
-      });
-      await render();
-      await sync();
-    });
+      }),
+    );
 
     li.append(name, macros, del);
     ul.append(li);
@@ -480,31 +447,6 @@ function renderItems(d: Day): void {
 }
 
 // ----------------------------------------------------------------- settings
-
-/**
- * Starting values for the setup form only. The running app never reads these:
- * once saved they live in config.json in the data repo. See PLAN.md.
- */
-function suggestedConfig(): Config {
-  return {
-    version: 1,
-    bio: { heightCm: 192, birth: "1991-03", sex: "m" },
-    goal: { kcalOffset: 0, kcalWindow: 400, proteinGPerKg: 1.6 },
-    estimator: {
-      levelHalfLifeDays: 10,
-      trendHalfLifeDays: 28,
-      historyDays: 180,
-      tdeeWindowDays: 21,
-      blendFullConfidenceDays: 14,
-      activityFactor: 1.4,
-      biasGain: 0.3,
-      biasLeak: 0.96,
-      biasMaxKcal: 900,
-    },
-    llm: { provider: "anthropic", model: "claude-sonnet-5" },
-    notifications: defaultNotifications(),
-  };
-}
 
 function fillSettingsForms(): void {
   const s = loadSettings();
@@ -516,76 +458,38 @@ function fillSettingsForms(): void {
     $<HTMLInputElement>("c-openai").value = s.openaiKey ?? "";
   }
 
-  // Keys added after a config was written come through as undefined. The form is
-  // the one place suggestions are allowed, so fill the gaps here and let the
-  // next save persist them. The running app still reads config.json only.
-  const suggested = suggestedConfig();
-  const saved = cachedConfig();
-  const c: Config = saved
-    ? { ...saved, estimator: { ...suggested.estimator, ...saved.estimator } }
-    : suggested;
-  $<HTMLInputElement>("g-offset").value = String(c.goal.kcalOffset);
-  $<HTMLInputElement>("g-window").value = String(c.goal.kcalWindow);
-  $<HTMLInputElement>("g-protein").value = String(c.goal.proteinGPerKg);
-  $<HTMLInputElement>("b-height").value = String(c.bio.heightCm);
-  $<HTMLInputElement>("b-birth").value = c.bio.birth;
-  $<HTMLSelectElement>("b-sex").value = c.bio.sex;
-  $<HTMLInputElement>("e-activity").value = String(c.estimator.activityFactor);
-  $<HTMLInputElement>("e-level").value = String(c.estimator.levelHalfLifeDays);
-  $<HTMLInputElement>("e-trend").value = String(c.estimator.trendHalfLifeDays);
-  $<HTMLInputElement>("e-history").value = String(c.estimator.historyDays);
-  $<HTMLInputElement>("e-window").value = String(c.estimator.tdeeWindowDays);
-  $<HTMLInputElement>("e-confidence").value = String(c.estimator.blendFullConfidenceDays);
-  $<HTMLInputElement>("e-bias-gain").value = String(c.estimator.biasGain);
-  $<HTMLInputElement>("e-bias-leak").value = String(c.estimator.biasLeak);
-  $<HTMLInputElement>("e-bias-max").value = String(c.estimator.biasMaxKcal);
-  $<HTMLSelectElement>("e-provider").value = c.llm.provider ?? "anthropic";
-  $<HTMLInputElement>("e-model").value = c.llm.model;
+  // Already merged over the defaults by the store, so every field has a value
+  // whether or not the stored config mentions it.
+  const c = cachedConfig() ?? defaultConfig();
+  for (const [id, path] of FIELDS) {
+    const value = at(c, path);
+    if (typeof value === "boolean") $<HTMLInputElement>(id).checked = value;
+    else $<HTMLInputElement>(id).value = String(value);
+  }
 
-  const n = notificationsOf(saved);
-  $<HTMLInputElement>("n-weight-on").checked = n.weight.enabled;
-  $<HTMLInputElement>("n-weight-at").value = n.weight.time;
-  $<HTMLInputElement>("n-food-on").checked = n.nutrition.enabled;
-  $<HTMLInputElement>("n-food-at").value = n.nutrition.time;
   $("notify-note").textContent =
     "Best effort: the device has to allow notifications, and one can arrive late" +
     " or, if gainz is closed and the browser will not wake it, not at all.";
 }
 
+/**
+ * The inverse. A select answers to .value just like an input, so one loop reads
+ * both. Anything unreadable falls back to its default rather than being saved
+ * as NaN, which is the same guarantee the store gives on the way in.
+ */
+function readConfigForm(): Config {
+  const raw: Record<string, unknown> = {};
+  for (const [id, path, fallback] of FIELDS) {
+    const value =
+      typeof fallback === "boolean" ? checked(id) : typeof fallback === "number" ? num(id) : val(id);
+    put(raw, path, value);
+  }
+  return withDefaults(raw);
+}
+
 $("goal-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const c: Config = {
-    version: 1,
-    bio: {
-      heightCm: num("b-height"),
-      birth: val("b-birth"),
-      sex: $<HTMLSelectElement>("b-sex").value as "m" | "f",
-    },
-    goal: {
-      kcalOffset: num("g-offset"),
-      kcalWindow: num("g-window"),
-      proteinGPerKg: num("g-protein"),
-    },
-    estimator: {
-      levelHalfLifeDays: num("e-level"),
-      trendHalfLifeDays: num("e-trend"),
-      historyDays: num("e-history"),
-      tdeeWindowDays: num("e-window"),
-      blendFullConfidenceDays: num("e-confidence"),
-      activityFactor: num("e-activity"),
-      biasGain: num("e-bias-gain"),
-      biasLeak: num("e-bias-leak"),
-      biasMaxKcal: num("e-bias-max"),
-    },
-    llm: {
-      provider: $<HTMLSelectElement>("e-provider").value as Config["llm"]["provider"],
-      model: val("e-model"),
-    },
-    notifications: {
-      weight: { enabled: checked("n-weight-on"), time: val("n-weight-at") },
-      nutrition: { enabled: checked("n-food-on"), time: val("n-food-at") },
-    },
-  };
+  const c = readConfigForm();
   saveConfig(c);
 
   // Permission is asked for here rather than on the toggle: this is the point
@@ -620,35 +524,6 @@ $("conn-form").addEventListener("submit", async (e) => {
   msg("conn-msg", "Saved.", "ok");
 });
 
-// -------------------------------------------------------------- csv import
-
-$("csv-go").addEventListener("click", async () => {
-  const text = $<HTMLTextAreaElement>("csv").value;
-  let rows: WeightRow[];
-  try {
-    rows = parseWeightCsv(text);
-  } catch (err) {
-    msg("csv-msg", String((err as Error).message), "err");
-    return;
-  }
-  if (!rows.length) {
-    msg("csv-msg", "No usable rows.", "err");
-    return;
-  }
-
-  const byDay = new Map(rows.map((r) => [r.day, r.kg]));
-  msg("csv-msg", `Importing ${byDay.size} weigh-ins...`);
-  await updateDays([...byDay.keys()], (d, key) => {
-    d.weight_kg = byDay.get(key)!;
-  });
-  await sync();
-
-  const months = new Set([...byDay.keys()].map(monthOf)).size;
-  msg("csv-msg", `Imported ${byDay.size} weigh-ins across ${months} months.`, "ok");
-  $<HTMLTextAreaElement>("csv").value = "";
-  await render();
-});
-
 // -------------------------------------------------------------------- start
 
 addEventListener("online", () => void sync());
@@ -671,8 +546,11 @@ addEventListener("visibilitychange", () => {
 // The path is relative, so the worker registers at whatever prefix the app is
 // served from and its scope covers exactly the app. Failure is ignored: offline
 // support is a bonus and must never keep the app from starting.
+//
+// A module worker, so it can import the reminder logic the page also uses
+// rather than carrying a hand-synced copy of it.
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js").catch(() => {});
+  navigator.serviceWorker.register("sw.js", { type: "module" }).catch(() => {});
 }
 
 void boot();
