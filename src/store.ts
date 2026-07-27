@@ -30,6 +30,8 @@ const OUTBOX = "gainz.outbox";
 /** Last state we know the server had, kept so merges can tell a local deletion
  *  apart from an item another device just added. */
 const BASE = "gainz.base.";
+/** Per-path ETag, so a re-read of an unchanged month costs a bodyless 304. */
+const ETAG = "gainz.etag.";
 
 /** path -> changed day keys, or null meaning "replace the whole file". */
 type Outbox = Record<string, DayKey[] | null>;
@@ -50,8 +52,15 @@ function readCache(path: string): string | null {
   return localStorage.getItem(CACHE + path);
 }
 
+/**
+ * Drops the etag: it certifies that the cached body is the server's, and any
+ * write through here is either a local edit or a fresh copy whose own etag the
+ * caller sets immediately after. Getting this backwards would let a conditional
+ * read answer 304 and quietly bless an unsynced local edit as server truth.
+ */
 function writeCache(path: string, text: string): void {
   localStorage.setItem(CACHE + path, text);
+  writeEtag(path, null);
 }
 
 function readBase(path: string): MonthFile | null {
@@ -61,6 +70,16 @@ function readBase(path: string): MonthFile | null {
 
 function writeBase(path: string, text: string): void {
   localStorage.setItem(BASE + path, text);
+}
+
+/** Only offered when we still hold the body it describes. */
+function readEtag(path: string): string | null {
+  return readCache(path) === null ? null : localStorage.getItem(ETAG + path);
+}
+
+function writeEtag(path: string, etag: string | null): void {
+  if (etag) localStorage.setItem(ETAG + path, etag);
+  else localStorage.removeItem(ETAG + path);
 }
 
 function readOutbox(): Outbox {
@@ -92,10 +111,14 @@ export function pendingWrites(): number {
 // ---------------------------------------------------------------- months
 
 async function fetchMonth(m: MonthKey): Promise<MonthFile> {
-  const remote = await getFile(settings(), monthPath(m));
-  const text = remote ? remote.text : JSON.stringify(emptyMonth());
-  writeCache(monthPath(m), text);
-  writeBase(monthPath(m), text);
+  const path = monthPath(m);
+  const remote = await getFile(settings(), path, readEtag(path));
+  if (remote.kind === "unchanged") return cachedMonth(m) ?? emptyMonth();
+
+  const text = remote.kind === "file" ? remote.text : JSON.stringify(emptyMonth());
+  writeCache(path, text);
+  writeBase(path, text);
+  if (remote.kind === "file") writeEtag(path, remote.etag);
   return JSON.parse(text) as MonthFile;
 }
 
@@ -107,6 +130,9 @@ function cachedMonth(m: MonthKey): MonthFile | null {
 /** Months already pulled from the server during this page session. */
 const fetched = new Set<MonthKey>();
 
+/** In-flight fetches, so overlapping reads of one month share a request. */
+const inFlight = new Map<MonthKey, Promise<MonthFile>>();
+
 /**
  * Forces the next read of these months to go to the server. Called when the app
  * regains focus, which is the moment another device's changes should appear.
@@ -116,14 +142,26 @@ export function invalidateMonths(...months: MonthKey[]): void {
 }
 
 /**
+ * Where a read is allowed to get its answer. "cache" never touches the network,
+ * which is what the first paint uses: it puts the last known numbers on screen
+ * in the same frame, and the server read that follows corrects them.
+ */
+export type Source = "server" | "cache";
+
+/**
  * Server first, once per month per session, then cached. Fetching on first use
  * also means a write is applied to fresh state rather than to whatever this
  * device happened to have cached.
  */
-export async function readMonth(m: MonthKey): Promise<MonthFile> {
-  if (!fetched.has(m)) {
+export async function readMonth(m: MonthKey, src: Source = "server"): Promise<MonthFile> {
+  if (src === "server" && !fetched.has(m)) {
+    let pending = inFlight.get(m);
+    if (!pending) {
+      pending = fetchMonth(m).finally(() => inFlight.delete(m));
+      inFlight.set(m, pending);
+    }
     try {
-      const file = await fetchMonth(m);
+      const file = await pending;
       fetched.add(m);
       return file;
     } catch {
@@ -133,19 +171,25 @@ export async function readMonth(m: MonthKey): Promise<MonthFile> {
   return cachedMonth(m) ?? emptyMonth();
 }
 
-export async function readDay(day: DayKey): Promise<Day> {
-  const month = await readMonth(monthOf(day));
+export async function readDay(day: DayKey, src: Source = "server"): Promise<Day> {
+  const month = await readMonth(monthOf(day), src);
   return month.days[day] ?? emptyDay();
 }
 
-/** Every logged day in [from, to], across however many month files that spans. */
-export async function readRange(from: DayKey, to: DayKey): Promise<Map<DayKey, Day>> {
+/**
+ * Every logged day in [from, to], across however many month files that spans.
+ * The months go out together: a 180-day history is seven files, and fetching
+ * them one after another is seven round trips of latency stacked end to end.
+ */
+export async function readRange(from: DayKey, to: DayKey, src: Source = "server"): Promise<Map<DayKey, Day>> {
   const months = new Set<MonthKey>();
   for (let d = from; d <= to; d = addDays(d, 1)) months.add(monthOf(d));
 
+  const files = await Promise.all([...months].map((m) => readMonth(m, src)));
+
   const out = new Map<DayKey, Day>();
-  for (const m of months) {
-    for (const [day, value] of Object.entries((await readMonth(m)).days)) {
+  for (const file of files) {
+    for (const [day, value] of Object.entries(file.days)) {
       if (day >= from && day <= to) out.set(day, value);
     }
   }
@@ -191,9 +235,11 @@ export function cachedConfig(): Config | null {
 }
 
 export async function refreshConfig(): Promise<Config | null> {
-  const remote = await getFile(settings(), CONFIG_PATH);
-  if (!remote) return null;
+  const remote = await getFile(settings(), CONFIG_PATH, readEtag(CONFIG_PATH));
+  if (remote.kind === "missing") return null;
+  if (remote.kind === "unchanged") return cachedConfig();
   writeCache(CONFIG_PATH, remote.text);
+  writeEtag(CONFIG_PATH, remote.etag);
   return JSON.parse(remote.text) as Config;
 }
 
@@ -237,7 +283,10 @@ async function flushPath(path: string, dirtyDays: DayKey[] | null): Promise<void
   if (localText === null) return;
 
   for (let attempt = 0; attempt < 3; attempt++) {
+    // Unconditional: this needs the remote body to merge against and its sha to
+    // write with, so there is nothing a 304 could save here.
     const remote = await getFile(settings(), path);
+    const current = remote.kind === "file" ? remote : null;
     let text: string;
 
     if (dirtyDays === null) {
@@ -245,7 +294,7 @@ async function flushPath(path: string, dirtyDays: DayKey[] | null): Promise<void
     } else {
       const local = JSON.parse(localText) as MonthFile;
       const base = readBase(path);
-      const merged = remote ? (JSON.parse(remote.text) as MonthFile) : emptyMonth();
+      const merged = current ? (JSON.parse(current.text) as MonthFile) : emptyMonth();
       for (const day of dirtyDays) {
         const value = local.days[day];
         if (value) merged.days[day] = mergeDay(base?.days[day], value, merged.days[day]);
@@ -257,10 +306,12 @@ async function flushPath(path: string, dirtyDays: DayKey[] | null): Promise<void
     }
 
     try {
-      await putFile(settings(), path, text, remote?.sha ?? null, `update ${path}`);
+      await putFile(settings(), path, text, current?.sha ?? null, `update ${path}`);
       // What we just pushed is now the agreed state, so it becomes the base for
-      // the next merge.
+      // the next merge. The PUT reply carries no etag we can reuse, so the next
+      // read of this path goes out unconditional.
       writeBase(path, text);
+      writeEtag(path, null);
       return;
     } catch (e) {
       const status = (e as { status?: number }).status;

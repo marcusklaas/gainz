@@ -3,8 +3,20 @@
 import type { Settings } from "./settings.js";
 
 export interface RemoteFile {
+  kind: "file";
   text: string;
   sha: string;
+  /** Feed back to the next getFile to turn it into a conditional request. */
+  etag: string | null;
+}
+
+/** The caller's etag still matches, so whatever it cached is current. */
+export interface Unchanged {
+  kind: "unchanged";
+}
+
+export interface Missing {
+  kind: "missing";
 }
 
 function toBase64(s: string): string {
@@ -31,16 +43,26 @@ function headers(s: Settings): HeadersInit {
   };
 }
 
-/** Null when the file does not exist yet. */
-export async function getFile(s: Settings, path: string): Promise<RemoteFile | null> {
+/**
+ * Passing the etag from a previous read makes this a conditional request. Old
+ * month files never change, so on a normal start almost every one of these
+ * comes back as a bodyless 304 — no JSON, no base64 to decode, and GitHub does
+ * not charge it against the rate limit.
+ */
+export async function getFile(
+  s: Settings,
+  path: string,
+  etag: string | null = null,
+): Promise<RemoteFile | Unchanged | Missing> {
   const res = await fetch(`${url(s, path)}?ref=${encodeURIComponent(s.branch)}`, {
-    headers: headers(s),
+    headers: etag ? { ...headers(s), "If-None-Match": etag } : headers(s),
     cache: "no-store",
   });
-  if (res.status === 404) return null;
+  if (res.status === 304) return { kind: "unchanged" };
+  if (res.status === 404) return { kind: "missing" };
   if (!res.ok) throw new Error(`GET ${path}: ${res.status} ${await res.text()}`);
   const body = (await res.json()) as { content: string; sha: string };
-  return { text: fromBase64(body.content), sha: body.sha };
+  return { kind: "file", text: fromBase64(body.content), sha: body.sha, etag: res.headers.get("etag") };
 }
 
 /** Returns the new SHA. Throws with status 409 on a conflicting write. */

@@ -119,6 +119,13 @@ h3 span {
 }
 
 #goals p { margin: .35rem 0 0; font-size: .85rem; }
+
+/* No numbers yet — either still loading or nothing to compute from. Dim rather
+   than absent: the layout is final from the first frame, so the arriving data
+   changes what the trackers say and never where anything sits. */
+#goals.pending h3 span { color: var(--dim); }
+#goals.pending .bar { opacity: .5; }
+
 #stats { margin: 1.25rem 0; }
 
 /* uPlot draws axes and grid from JS options (see chart.ts theme()); these rules

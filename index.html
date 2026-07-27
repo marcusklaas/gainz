@@ -46,12 +46,14 @@
       <button id="next-day" title="Next day">&rsaquo;</button>
     </header>
 
-    <div id="goals" hidden>
-      <h3>Protein <span id="p-nums"></span></h3>
+    <!-- Ships filled in with dashes and marked pending, so the trackers are on
+         screen in the first frame and the data lands in them. See resetGoals(). -->
+    <div id="goals" class="pending">
+      <h3>Protein <span id="p-nums">— / — g</span></h3>
       <div class="bar"><i id="p-fill"></i></div>
       <p id="p-note"></p>
 
-      <h3>Calories <span id="k-nums"></span></h3>
+      <h3>Calories <span id="k-nums">— kcal</span></h3>
       <div class="bar"><i id="k-fill"></i><i id="k-band"></i></div>
       <p id="k-note"></p>
     </div>

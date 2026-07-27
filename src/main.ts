@@ -1,4 +1,3 @@
-import { drawTrend } from "./chart.js";
 import { parseWeightCsv, type WeightRow } from "./csv.js";
 import { addDays, humanDay, monthOf, nowTime, todayKey } from "./dates.js";
 import { dayKcal, dayProtein, estimate, type Estimate } from "./estimate.js";
@@ -22,6 +21,7 @@ import {
   readRange,
   refreshConfig,
   saveConfig,
+  type Source,
   updateDay,
   updateDays,
 } from "./store.js";
@@ -47,6 +47,16 @@ let day = todayKey();
 
 // ------------------------------------------------------------------- boot
 
+/**
+ * Two passes on purpose. The first is pure localStorage and paints the day that
+ * was on screen last time before a single request goes out; the second is the
+ * authoritative one and corrects it. GitHub is a slow data store and always will
+ * be, so the fix is to stop the UI waiting on it to draw anything at all.
+ *
+ * The order of the network half is load-bearing: queued writes have to land
+ * before the months are re-read, or fetchMonth would overwrite the cache that
+ * holds them. flush() is a no-op with an empty outbox, which is the normal case.
+ */
 async function boot(): Promise<void> {
   if (!isConfigured()) {
     $("setup").hidden = false;
@@ -54,6 +64,9 @@ async function boot(): Promise<void> {
   }
   $("app").hidden = false;
   show("today");
+
+  fillSettingsForms();
+  await render("cache");
 
   try {
     await flush();
@@ -82,6 +95,22 @@ type Screen = "today" | "trend" | "settings";
 /** Latest estimate, kept so the chart can be drawn when Trend becomes visible. */
 let latest: Estimate | null = null;
 
+/**
+ * uPlot is by far the largest thing the app loads and Today never shows it, so
+ * it is fetched the first time Trend is actually looked at rather than being
+ * parsed on the critical path of every start.
+ */
+let chartModule: Promise<typeof import("./chart.js")> | null = null;
+
+/**
+ * Always draws the newest estimate rather than one captured at call time, so
+ * two paints racing across the dynamic import settle on the same picture.
+ */
+async function paintChart(): Promise<void> {
+  const { drawTrend } = await (chartModule ??= import("./chart.js"));
+  drawTrend($("chart"), latest?.samples ?? [], latest?.trendLine ?? []);
+}
+
 function show(name: Screen): void {
   for (const s of ["today", "trend", "settings"] as const) $(s).hidden = s !== name;
   for (const b of document.querySelectorAll<HTMLButtonElement>("nav button")) {
@@ -89,7 +118,7 @@ function show(name: Screen): void {
   }
   // uPlot sizes from the container, which measures zero while hidden, so the
   // chart can only be built once its section is on screen.
-  if (name === "trend" && latest) drawTrend($("chart"), latest.samples, latest.trendLine);
+  if (name === "trend" && latest) void paintChart();
 }
 
 for (const b of document.querySelectorAll<HTMLButtonElement>("nav button")) {
@@ -237,21 +266,41 @@ $("f-logging").addEventListener("change", async () => {
   await sync();
 });
 
-async function render(): Promise<void> {
-  const d = await readDay(day);
+/** Detached from render(), so a failure here cannot surface as an unhandled rejection. */
+async function planReminders(cfg: Config | null, d: Day, src: Source): Promise<void> {
+  try {
+    await updatePlan(cfg, day === todayKey() ? d : await readDay(todayKey(), src));
+  } catch {
+    // Reminders are best effort by design; see the note under Settings.
+  }
+}
+
+async function render(src: Source = "server"): Promise<void> {
+  const cfg = cachedConfig();
+  const missing = cfg ? missingNumbers(cfg) : [];
+
+  // Started before the first await so that the month holding the day on screen
+  // and the months behind the estimator window go out together. readMonth
+  // collapses the overlap between the two into one request.
+  const history =
+    cfg && !missing.length
+      ? readRange(addDays(day, -cfg.estimator.historyDays), day, src)
+      : null;
+
+  const d = await readDay(day, src);
   $("day-label").textContent = humanDay(day);
   $<HTMLButtonElement>("next-day").disabled = day === todayKey();
   $<HTMLInputElement>("f-weight").value = d.weight_kg ? String(d.weight_kg) : "";
   $<HTMLInputElement>("f-logging").checked = d.logging === "complete";
   renderItems(d);
 
-  const cfg = cachedConfig();
   // Reminders are always about today, whichever day happens to be on screen,
   // and are re-planned here so that saving a weight silences one immediately.
-  await updatePlan(cfg, day === todayKey() ? d : await readDay(todayKey()));
+  // Not awaited: it is a Cache API round trip plus, on an older day, a month
+  // read, and nothing on screen waits on the answer.
+  void planReminders(cfg, d, src);
   if (!cfg) return;
 
-  const missing = missingNumbers(cfg);
   if (missing.length) {
     const note = `Open Settings and press Save config — missing ${missing.join(", ")}.`;
     $("goals").hidden = true;
@@ -260,6 +309,7 @@ async function render(): Promise<void> {
     $("trend-note").textContent = note;
     return;
   }
+  $("goals").hidden = false;
 
   const e = cfg.estimator;
   $("trend-basis").textContent =
@@ -267,9 +317,11 @@ async function render(): Promise<void> {
     ` Line is Holt smoothing — ${e.levelHalfLifeDays}-day level half-life,` +
     ` ${e.trendHalfLifeDays}-day trend half-life.`;
 
-  const history = await readRange(addDays(day, -e.historyDays), day);
-  const est = estimate(cfg, history, day);
-  if (est) await recordGoal(d, est);
+  const est = estimate(cfg, await history!, day);
+  // Only ever pinned from a server read. The cache pass exists to put something
+  // on screen fast, and a number derived from a stale month is not one to write
+  // down permanently as what today was judged against.
+  if (est && src === "server") await recordGoal(d, est);
   renderGoals(d, est);
 }
 
@@ -317,6 +369,26 @@ function missingNumbers(cfg: Config): string[] {
   return out;
 }
 
+const DASH = "—";
+
+/**
+ * Back to the state the markup ships in: both trackers present, both empty.
+ *
+ * The bars are laid out from the first frame and stay laid out — an estimate
+ * arriving fills them in rather than making them appear. Waiting on seven month
+ * files before drawing the shape of the screen is what made a slow start read as
+ * a broken one.
+ */
+function resetGoals(): void {
+  $("goals").classList.add("pending");
+  $("p-nums").textContent = `${DASH} / ${DASH} g`;
+  $("k-nums").textContent = `${DASH} kcal`;
+  $("p-note").textContent = "";
+  $("k-note").textContent = "";
+  for (const id of ["p-fill", "k-fill"]) bar(id, 0, "");
+  $("k-band").style.width = "0%";
+}
+
 function bar(id: string, fraction: number, state: string): void {
   const e = $(id);
   e.style.width = `${Math.min(Math.max(fraction, 0), 1) * 100}%`;
@@ -325,14 +397,15 @@ function bar(id: string, fraction: number, state: string): void {
 
 function renderGoals(d: Day, est: Estimate | null): void {
   latest = est;
-  $("goals").hidden = !est;
-  if (!$("trend").hidden) drawTrend($("chart"), est?.samples ?? [], est?.trendLine ?? []);
+  if (!$("trend").hidden) void paintChart();
 
   if (!est) {
+    resetGoals();
     $("stats").textContent = "Log a weight to get targets.";
     $("trend-note").textContent = "No weigh-ins yet. Import the CSV in Settings.";
     return;
   }
+  $("goals").classList.remove("pending");
 
   const protein = dayProtein(d);
   const hit = protein >= est.proteinTarget;
