@@ -6,6 +6,9 @@
 <title>gainz</title>
 <meta name="theme-color" content="#16181c">
 <link rel="manifest" href="manifest.webmanifest">
+<!-- SVG first for anything that can scale it; the PNG is the fallback. -->
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/favicon.png" sizes="48x48" type="image/png">
 <!-- iOS ignores the manifest for both of these. -->
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="gainz">
@@ -74,13 +77,11 @@
 
     <ul id="items"></ul>
 
-    <label>Counts toward TDEE
-      <select id="f-logging">
-        <option value="">auto</option>
-        <option value="complete">yes, fully logged</option>
-        <option value="incomplete">no, partial</option>
-      </select>
+    <label class="check">
+      <input id="f-logging" type="checkbox">
+      <span>Everything logged — count this day</span>
     </label>
+    <p class="note">Days left unticked are ignored by the TDEE and goal maths.</p>
   </section>
 
   <section id="trend" hidden>
@@ -114,7 +115,6 @@
       <label>History days <input id="e-history" type="number" required></label>
       <label>TDEE window days <input id="e-window" type="number" required></label>
       <label>Full-confidence days <input id="e-confidence" type="number" required></label>
-      <label>Partial-day kcal fraction <input id="e-fraction" type="number" step="0.05" required></label>
       <label>Bias gain (0 turns it off) <input id="e-bias-gain" type="number" step="0.05" min="0" required></label>
       <label>Bias leak per day <input id="e-bias-leak" type="number" step="0.01" min="0" max="1" required></label>
       <label>Bias cap (kcal) <input id="e-bias-max" type="number" min="0" required></label>
@@ -125,6 +125,19 @@
         </select>
       </label>
       <label>LLM model <input id="e-model" required></label>
+
+      <h2>Notifications</h2>
+      <label class="check">
+        <input id="n-weight-on" type="checkbox">
+        <span>Remind me to weigh in</span>
+      </label>
+      <label>At <input id="n-weight-at" type="time" required></label>
+      <label class="check">
+        <input id="n-food-on" type="checkbox">
+        <span>Remind me to tick the day off</span>
+      </label>
+      <label>At <input id="n-food-at" type="time" required></label>
+      <p id="notify-note" class="note"></p>
 
       <button>Save config</button>
     </form>

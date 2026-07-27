@@ -47,6 +47,18 @@ label {
 }
 label input, label select { display: block; width: 100%; margin-top: .15rem; }
 
+/* Checkbox rows read the other way round: control first, then the text, both on
+   one line. The box is sized up because the whole row is a phone tap target. */
+label.check { display: flex; align-items: center; gap: .5rem; color: var(--fg); }
+label.check input {
+  display: inline-block;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--ok);
+}
+
 input, select, textarea, button {
   font: inherit;
   color: var(--fg);

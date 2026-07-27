@@ -44,8 +44,19 @@ export interface Day {
    */
   goal_kcal?: number;
   items: FoodItem[];
-  /** Override for the auto-classifier. Absent means "decide automatically". */
-  logging?: "complete" | "incomplete";
+  /**
+   * Set only when the user says so. Absent means the day is not fully logged
+   * and nothing derived reads it.
+   *
+   * There is deliberately no auto-classifier. A forgotten dinner still clears
+   * any intake threshold you could pick, so guessing admits exactly the days
+   * that are worst to admit: ones that look complete and land low. Each of
+   * those drags TDEE and every following day's target down with it.
+   *
+   * Files written before this was explicit may carry "incomplete", which reads
+   * the same as absent.
+   */
+  logging?: "complete";
 }
 
 export interface MonthFile {
@@ -85,8 +96,6 @@ export interface Config {
     historyDays: number;
     tdeeWindowDays: number;
     blendFullConfidenceDays: number;
-    /** Days below this fraction of TDEE are treated as partially logged. */
-    incompleteDayKcalFraction: number;
     activityFactor: number;
     /** Fraction of the accumulated bias handed back per day. 0 disables the correction. */
     biasGain: number;
@@ -96,6 +105,21 @@ export interface Config {
     biasMaxKcal: number;
   };
   llm: { provider: Provider; model: string };
+  notifications: Notifications;
+}
+
+/** A daily nudge, or not. "HH:MM" local — there is no timezone here beyond
+ *  whatever the device thinks the time is. */
+export interface Reminder {
+  enabled: boolean;
+  time: string;
+}
+
+export interface Notifications {
+  /** Weigh-in. Stays quiet once the day has a weight. */
+  weight: Reminder;
+  /** Confirming the day is fully logged. Stays quiet once it is ticked. */
+  nutrition: Reminder;
 }
 
 export type Provider = "anthropic" | "openai";

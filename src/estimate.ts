@@ -199,14 +199,13 @@ export interface Estimate {
 }
 
 /**
- * Intake for a day that can be taken at face value, or null if the day is
- * missing, marked incomplete, or too light to be a full day's logging.
+ * Intake for a day the user has confirmed is fully logged, else null. Every
+ * other day — unmarked, empty, still in progress — says nothing about intake
+ * and is skipped rather than counted low. See the note on Day.logging.
  */
-function countedKcal(day: Day | undefined, floor: number): number | null {
-  if (!day?.items.length || day.logging === "incomplete") return null;
-  const kcal = dayKcal(day);
-  if (day.logging !== "complete" && kcal < floor) return null;
-  return kcal;
+function countedKcal(day: Day | undefined): number | null {
+  if (day?.logging !== "complete" || !day.items.length) return null;
+  return dayKcal(day);
 }
 
 /** Null until at least one weight exists — there is no basis for a target without it. */
@@ -222,17 +221,13 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
   const bmr = mifflinBmr(cfg.bio, trendKg, today);
   const formulaTdee = bmr * e.activityFactor;
 
-  // Partial-day detection anchors on the formula TDEE rather than the measured
-  // one. Anchoring on measured would be a feedback loop: under-logging lowers
-  // TDEE, which lowers the bar, which admits more under-logged days.
-  const floor = e.incompleteDayKcalFraction * formulaTdee;
-
-  // Today is excluded — a day in progress would drag the average down hard.
-  // It also gives the bias accumulator the property it needs for free: today's
-  // target is built from complete days only, so logging food cannot move it.
+  // Today is excluded even if it has already been ticked — a day still in
+  // progress would drag the average down hard. It also gives the bias
+  // accumulator the property it needs for free: today's target is built from
+  // earlier days only, so logging food cannot move it.
   const counted: number[] = [];
   for (let d = from; d < today; d = addDays(d, 1)) {
-    const kcal = countedKcal(days.get(d), floor);
+    const kcal = countedKcal(days.get(d));
     if (kcal !== null) counted.push(kcal);
   }
 
@@ -241,7 +236,7 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
   // of its zero start when it reported a number.
   const forBias: Counted[] = [];
   for (const d of [...days.keys()].sort()) {
-    const kcal = d < today ? countedKcal(days.get(d), floor) : null;
+    const kcal = d < today ? countedKcal(days.get(d)) : null;
     if (kcal !== null) forBias.push({ day: d, kcal, goal: days.get(d)!.goal_kcal });
   }
 

@@ -4,6 +4,7 @@ import { addDays, humanDay, monthOf, nowTime, todayKey } from "./dates.js";
 import { dayKcal, dayProtein, estimate, type Estimate } from "./estimate.js";
 import { checkAccess } from "./github.js";
 import { estimateFood } from "./llm.js";
+import { defaultNotifications, notificationsOf, requestReminders, updatePlan } from "./notify.js";
 import {
   isConfigured,
   loadSettings,
@@ -34,6 +35,7 @@ function $<T extends HTMLElement = HTMLElement>(id: string): T {
 
 const val = (id: string) => $<HTMLInputElement>(id).value.trim();
 const num = (id: string) => Number($<HTMLInputElement>(id).value);
+const checked = (id: string) => $<HTMLInputElement>(id).checked;
 
 function msg(id: string, text: string, kind: "ok" | "err" | "" = ""): void {
   const e = $(id);
@@ -226,9 +228,9 @@ $("food-form").addEventListener("submit", async (e) => {
 });
 
 $("f-logging").addEventListener("change", async () => {
-  const v = $<HTMLSelectElement>("f-logging").value;
+  const on = $<HTMLInputElement>("f-logging").checked;
   await updateDay(day, (d) => {
-    if (v) d.logging = v as "complete" | "incomplete";
+    if (on) d.logging = "complete";
     else delete d.logging;
   });
   await render();
@@ -240,10 +242,13 @@ async function render(): Promise<void> {
   $("day-label").textContent = humanDay(day);
   $<HTMLButtonElement>("next-day").disabled = day === todayKey();
   $<HTMLInputElement>("f-weight").value = d.weight_kg ? String(d.weight_kg) : "";
-  $<HTMLSelectElement>("f-logging").value = d.logging ?? "";
+  $<HTMLInputElement>("f-logging").checked = d.logging === "complete";
   renderItems(d);
 
   const cfg = cachedConfig();
+  // Reminders are always about today, whichever day happens to be on screen,
+  // and are re-planned here so that saving a weight silences one immediately.
+  await updatePlan(cfg, day === todayKey() ? d : await readDay(todayKey()));
   if (!cfg) return;
 
   const missing = missingNumbers(cfg);
@@ -418,13 +423,13 @@ function suggestedConfig(): Config {
       historyDays: 180,
       tdeeWindowDays: 21,
       blendFullConfidenceDays: 14,
-      incompleteDayKcalFraction: 0.5,
       activityFactor: 1.4,
       biasGain: 0.3,
       biasLeak: 0.96,
       biasMaxKcal: 900,
     },
     llm: { provider: "anthropic", model: "claude-sonnet-5" },
+    notifications: defaultNotifications(),
   };
 }
 
@@ -458,12 +463,20 @@ function fillSettingsForms(): void {
   $<HTMLInputElement>("e-history").value = String(c.estimator.historyDays);
   $<HTMLInputElement>("e-window").value = String(c.estimator.tdeeWindowDays);
   $<HTMLInputElement>("e-confidence").value = String(c.estimator.blendFullConfidenceDays);
-  $<HTMLInputElement>("e-fraction").value = String(c.estimator.incompleteDayKcalFraction);
   $<HTMLInputElement>("e-bias-gain").value = String(c.estimator.biasGain);
   $<HTMLInputElement>("e-bias-leak").value = String(c.estimator.biasLeak);
   $<HTMLInputElement>("e-bias-max").value = String(c.estimator.biasMaxKcal);
   $<HTMLSelectElement>("e-provider").value = c.llm.provider ?? "anthropic";
   $<HTMLInputElement>("e-model").value = c.llm.model;
+
+  const n = notificationsOf(saved);
+  $<HTMLInputElement>("n-weight-on").checked = n.weight.enabled;
+  $<HTMLInputElement>("n-weight-at").value = n.weight.time;
+  $<HTMLInputElement>("n-food-on").checked = n.nutrition.enabled;
+  $<HTMLInputElement>("n-food-at").value = n.nutrition.time;
+  $("notify-note").textContent =
+    "Best effort: the device has to allow notifications, and one can arrive late" +
+    " or, if gainz is closed and the browser will not wake it, not at all.";
 }
 
 $("goal-form").addEventListener("submit", async (e) => {
@@ -486,7 +499,6 @@ $("goal-form").addEventListener("submit", async (e) => {
       historyDays: num("e-history"),
       tdeeWindowDays: num("e-window"),
       blendFullConfidenceDays: num("e-confidence"),
-      incompleteDayKcalFraction: num("e-fraction"),
       activityFactor: num("e-activity"),
       biasGain: num("e-bias-gain"),
       biasLeak: num("e-bias-leak"),
@@ -496,8 +508,19 @@ $("goal-form").addEventListener("submit", async (e) => {
       provider: $<HTMLSelectElement>("e-provider").value as Config["llm"]["provider"],
       model: val("e-model"),
     },
+    notifications: {
+      weight: { enabled: checked("n-weight-on"), time: val("n-weight-at") },
+      nutrition: { enabled: checked("n-food-on"), time: val("n-food-at") },
+    },
   };
   saveConfig(c);
+
+  // Permission is asked for here rather than on the toggle: this is the point
+  // where the times are settled, and a prompt that appears mid-edit gets
+  // dismissed. render() below re-plans against whatever the answer was.
+  const wanted = c.notifications.weight.enabled || c.notifications.nutrition.enabled;
+  if (wanted) $("notify-note").textContent = await requestReminders();
+
   await sync();
   await render();
   $("config-banner").hidden = true;
