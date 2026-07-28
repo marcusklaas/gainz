@@ -258,9 +258,14 @@ li button { border: 0; background: none; padding: 0 .25rem; }
   text-align: left;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .45);
 }
+/* The trigger is the label, not the ⓘ — a 13 px glyph is a mean thing to ask a
+   mouse to find, and the words next to it are what you were already reading.
+   The control inside the label is deliberately excluded: the bubble hangs over
+   that field, so hovering it has to dismiss rather than sustain the tooltip, or
+   there is no way to reach the input past its own explanation. */
 @media (hover: hover) {
-  .tip:hover { color: var(--fg); }
-  .tip:hover .bubble { display: block; }
+  #settings label:hover:not(:has(input:hover, select:hover)) .tip { color: var(--fg); }
+  #settings label:hover:not(:has(input:hover, select:hover)) .bubble { display: block; }
 }
 .tip.open .bubble, .tip:focus-visible .bubble { display: block; }
 
