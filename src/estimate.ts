@@ -102,9 +102,9 @@ export function regress(samples: Sample[]): Trend | null {
 }
 
 export function mifflinBmr(bio: Config["bio"], kg: number, on: DayKey): number {
-  const [by, bm] = bio.birth.split("-").map(Number);
-  const [y, m] = on.split("-").map(Number);
-  const age = y! - by! + (m! - bm!) / 12;
+  // Both are plain ISO dates, so both parse as UTC midnight and the difference
+  // between them carries no timezone.
+  const age = (Date.parse(on) - Date.parse(bio.birth)) / (365.2425 * 864e5);
   return (
     MIFFLIN.weight * kg +
     MIFFLIN.height * bio.heightCm -

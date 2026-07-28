@@ -192,6 +192,65 @@ li .name { flex: 1; overflow-wrap: anywhere; }
 li .macros { color: var(--dim); font-size: .85rem; white-space: nowrap; }
 li button { border: 0; background: none; padding: 0 .25rem; }
 
+/* Settings is a stack of folded sections. The heading is the whole hit area, so
+   there is nothing to aim at on a phone, and the marker is drawn by us because
+   the native triangle sits on the wrong side and cannot be styled. */
+#settings details { border-bottom: 1px solid var(--line); }
+#settings details[open] { padding-bottom: .75rem; }
+#settings summary {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .75rem 0;
+  cursor: pointer;
+  list-style: none;
+}
+#settings summary::-webkit-details-marker { display: none; }
+#settings summary h2 { margin: 0; flex: 1; }
+#settings summary::after {
+  content: "›";
+  color: var(--dim);
+  transition: transform .15s;
+}
+#settings details[open] > summary::after { transform: rotate(90deg); }
+#settings form { margin: 0; }
+
+/* One line of explanation per setting, behind an ⓘ built by buildTips(). A
+   mouse hovers it; a tap toggles .open, which is the same thing for a finger
+   that has no hover to give. The bubble hangs off the label rather than the
+   button so a long one cannot run off the side of a narrow screen. */
+#settings label { position: relative; }
+.tip {
+  border: 0;
+  background: none;
+  padding: 0 .25rem;
+  font-size: .85rem;
+  line-height: 1;
+}
+.tip.open { color: var(--fg); }
+.bubble {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 1.6rem;
+  z-index: 5;
+  width: max-content;
+  max-width: 100%;
+  padding: .45rem .6rem;
+  color: var(--fg);
+  background: #23262e;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: .8rem;
+  text-align: left;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .45);
+}
+@media (hover: hover) {
+  .tip:hover { color: var(--fg); }
+  .tip:hover .bubble { display: block; }
+}
+.tip.open .bubble, .tip:focus-visible .bubble { display: block; }
+
 .note, .msg { color: var(--dim); font-size: .85rem; }
 .msg:empty { display: none; }
 .msg.ok { color: var(--ok); }

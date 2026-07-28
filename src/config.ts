@@ -23,7 +23,7 @@ export const FIELDS: readonly Field[] = [
   ["g-protein", "goal.proteinGPerKg", 1.6],
 
   ["b-height", "bio.heightCm", 192],
-  ["b-birth", "bio.birth", "1991-03"],
+  ["b-birth", "bio.birth", "1991-03-15"],
   ["b-sex", "bio.sex", "m"],
 
   ["e-activity", "estimator.activityFactor", 1.4],
@@ -83,11 +83,24 @@ function usable(value: unknown, fallback: FieldValue): boolean {
  * in the table are dropped, which is also what the old form-to-literal write
  * path did — the table is the whole definition of the file.
  */
+/**
+ * Birth was kept to the month before the form had a date picker. A date input
+ * will not show a value it cannot parse, so a config written back then has to
+ * be given a day — mid-month, the least wrong guess for one never recorded.
+ * Anything still unparseable is not a date and falls back like any other field.
+ */
+function birthDate(stored: unknown, fallback: string): string {
+  const s = typeof stored === "string" ? stored : "";
+  const dated = /^\d{4}-\d{2}$/.test(s) ? `${s}-15` : s;
+  return /^\d{4}-\d{2}-\d{2}$/.test(dated) ? dated : fallback;
+}
+
 export function withDefaults(raw: unknown): Config {
   const out: Record<string, unknown> = { version: 1 };
   for (const [, path, fallback] of FIELDS) {
     const stored = at(raw, path);
-    put(out, path, usable(stored, fallback) ? stored : fallback);
+    if (path === "bio.birth") put(out, path, birthDate(stored, fallback as string));
+    else put(out, path, usable(stored, fallback) ? stored : fallback);
   }
   // Sound because the table covers every field of Config, which is the one
   // invariant this module exists to hold.

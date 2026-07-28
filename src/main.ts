@@ -36,10 +36,23 @@ const val = (id: string) => $<HTMLInputElement>(id).value.trim();
 const num = (id: string) => Number($<HTMLInputElement>(id).value);
 const checked = (id: string) => $<HTMLInputElement>(id).checked;
 
+/** Pending flash() clears, one per element, so a new message cancels the old
+ *  one's timer instead of being wiped by it. */
+const clears = new Map<string, number>();
+
 function msg(id: string, text: string, kind: "ok" | "err" | "" = ""): void {
+  clearTimeout(clears.get(id));
+  clears.delete(id);
   const e = $(id);
   e.textContent = text;
   e.className = `msg ${kind}`;
+}
+
+/** Confirmation that has been read once it has been seen. Left up, a "Saved."
+ *  from an hour ago still reads as news about whatever was just typed. */
+function flash(id: string, text: string, kind: "ok" | "err" = "ok"): void {
+  msg(id, text, kind);
+  clears.set(id, setTimeout(() => msg(id, ""), 4000));
 }
 
 let day = todayKey();
@@ -84,8 +97,13 @@ function needsConfig(): void {
   banner.hidden = false;
   banner.textContent = "No config.json in the repo yet. Review these values and save.";
   banner.className = "msg err";
+  // Asking someone to review values behind five folded headings is asking them
+  // not to. This is the one visit where all of it is the point.
+  for (const d of sections()) d.open = true;
   show("settings");
 }
+
+const sections = () => document.querySelectorAll<HTMLDetailsElement>("#settings details");
 
 // ----------------------------------------------------------------- screens
 
@@ -448,6 +466,68 @@ function renderItems(d: Day): void {
 
 // ----------------------------------------------------------------- settings
 
+/**
+ * The ⓘ next to each setting, built from the label's data-tip so the markup
+ * carries the words and nothing else. Hover shows it where there is a mouse;
+ * a tap opens it and the next tap anywhere closes it, which is the nearest
+ * thing to hovering that a finger has.
+ */
+function buildTips(): void {
+  for (const label of document.querySelectorAll<HTMLElement>("#settings label[data-tip]")) {
+    const text = label.dataset["tip"]!;
+    const tip = document.createElement("button");
+    tip.type = "button";
+    tip.className = "tip";
+    tip.textContent = "ⓘ";
+    tip.setAttribute("aria-label", text);
+
+    const bubble = document.createElement("span");
+    bubble.className = "bubble";
+    bubble.textContent = text;
+    tip.append(bubble);
+
+    // Inside a label, a click on anything reaches the control — on a checkbox
+    // row it would toggle the box. Cancelling the default is what stops that.
+    tip.addEventListener("click", (e) => {
+      e.preventDefault();
+      const wasOpen = tip.classList.contains("open");
+      closeTips();
+      tip.classList.toggle("open", !wasOpen);
+    });
+
+    // The control comes first on a checkbox row and last everywhere else, and
+    // the ⓘ belongs after the words either way.
+    const control = label.querySelector("input, select");
+    if (control && !label.classList.contains("check")) label.insertBefore(tip, control);
+    else label.append(tip);
+  }
+}
+
+function closeTips(): void {
+  for (const t of document.querySelectorAll(".tip.open")) t.classList.remove("open");
+}
+
+// Runs after the tip's own handler, which is why an open one survives its own
+// click.
+document.addEventListener("click", (e) => {
+  if (!(e.target as HTMLElement).closest(".tip")) closeTips();
+});
+
+// A required field in a folded section still blocks the save, and the browser
+// cannot focus what it cannot show — so the section holding it is unfolded.
+// invalid does not bubble; capture is how one listener covers every field.
+for (const id of ["goal-form", "conn-form"]) {
+  $(id).addEventListener(
+    "invalid",
+    (e) => {
+      (e.target as HTMLElement).closest("details")?.setAttribute("open", "");
+    },
+    true,
+  );
+}
+
+buildTips();
+
 function fillSettingsForms(): void {
   const s = loadSettings();
   if (s) {
@@ -501,7 +581,7 @@ $("goal-form").addEventListener("submit", async (e) => {
   await sync();
   await render();
   $("config-banner").hidden = true;
-  msg("config-msg", "Saved.", "ok");
+  flash("config-msg", "Saved.");
 });
 
 $("conn-form").addEventListener("submit", async (e) => {
@@ -521,7 +601,7 @@ $("conn-form").addEventListener("submit", async (e) => {
     return;
   }
   saveSettings(s);
-  msg("conn-msg", "Saved.", "ok");
+  flash("conn-msg", "Saved.");
 });
 
 // -------------------------------------------------------------------- start

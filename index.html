@@ -97,66 +97,83 @@
   <section id="settings" hidden>
     <p id="config-banner" class="msg" hidden></p>
 
-    <h2>Goal</h2>
+    <!-- Every section starts folded: on most visits none of this is what was
+         come for. The one-line explanations live here in data-tip, and main.ts
+         turns each into the ⓘ next to the label. -->
     <form id="goal-form">
-      <label>Offset from TDEE (kcal) <input id="g-offset" type="number" required></label>
-      <label>Band width (kcal) <input id="g-window" type="number" min="0" required></label>
-      <label>Protein g per kg <input id="g-protein" type="number" step="0.1" required></label>
+      <details>
+        <summary><h2>Goal</h2></summary>
+        <label data-tip="Added to your estimated TDEE to get the daily calorie goal. Negative to lose weight, positive to gain.">Offset from TDEE (kcal) <input id="g-offset" type="number" required></label>
+        <label data-tip="Full width of the target band around the goal — half of it falls either side. Any day inside the band counts as on target.">Band width (kcal) <input id="g-window" type="number" min="0" required></label>
+        <label data-tip="Daily protein target, multiplied by your latest weight in kg.">Protein g per kg <input id="g-protein" type="number" step="0.1" required></label>
+      </details>
 
-      <h2>Body</h2>
-      <label>Height cm <input id="b-height" type="number" required></label>
-      <label>Born (YYYY-MM) <input id="b-birth" pattern="\d{4}-\d{2}" required></label>
-      <label>Sex
-        <select id="b-sex"><option value="m">m</option><option value="f">f</option></select>
-      </label>
-      <label>Activity factor <input id="e-activity" type="number" step="0.05" required></label>
+      <details>
+        <summary><h2>Body</h2></summary>
+        <label data-tip="Feeds the Mifflin–St Jeor formula that estimates your resting burn.">Height cm <input id="b-height" type="number" required></label>
+        <label data-tip="Only your age is taken from this, and only the formula uses it.">Born <input id="b-birth" type="date" min="1900-01-01" required></label>
+        <label data-tip="Which constant Mifflin–St Jeor uses for resting burn. The formula knows no other options.">Sex
+          <select id="b-sex"><option value="m">Male</option><option value="f">Female</option></select>
+        </label>
+        <label data-tip="Multiplies resting burn to give a starting TDEE, used until enough weigh-ins exist to measure the real one. Roughly 1.2 sedentary, 1.4 lightly active, 1.6 active.">Activity factor <input id="e-activity" type="number" step="0.05" required></label>
+      </details>
 
-      <h2>Estimator</h2>
-      <label>Level half-life days <input id="e-level" type="number" required></label>
-      <label>Trend half-life days <input id="e-trend" type="number" required></label>
-      <label>History days <input id="e-history" type="number" required></label>
-      <label>TDEE window days <input id="e-window" type="number" required></label>
-      <label>Full-confidence days <input id="e-confidence" type="number" required></label>
-      <label>Bias gain (0 turns it off) <input id="e-bias-gain" type="number" step="0.05" min="0" required></label>
-      <label>Bias leak per day <input id="e-bias-leak" type="number" step="0.01" min="0" max="1" required></label>
-      <label>Bias cap (kcal) <input id="e-bias-max" type="number" min="0" required></label>
-      <label>LLM provider
-        <select id="e-provider">
-          <option value="anthropic">anthropic</option>
-          <option value="openai">openai</option>
-        </select>
-      </label>
-      <label>LLM model <input id="e-model" required></label>
+      <details>
+        <summary><h2>Estimator</h2></summary>
+        <label data-tip="How fast the smoothed weight follows the scale. Shorter reacts sooner and jumps around more.">Level half-life days <input id="e-level" type="number" required></label>
+        <label data-tip="How fast the estimated rate of change adapts. Longer is calmer.">Trend half-life days <input id="e-trend" type="number" required></label>
+        <label data-tip="How far back to load. Warms up the smoother and sets the span of the Trend chart.">History days <input id="e-history" type="number" required></label>
+        <label data-tip="How many recent days the measured TDEE is fitted over — intake against weight change.">TDEE window days <input id="e-window" type="number" required></label>
+        <label data-tip="How many fully logged days before the measured TDEE is trusted on its own. Below this it is blended with the formula estimate.">Full-confidence days <input id="e-confidence" type="number" required></label>
+        <label data-tip="How much of the accumulated miss is handed back each day, shifting the whole band. 0 turns the correction off.">Bias gain (0 turns it off) <input id="e-bias-gain" type="number" step="0.05" min="0" required></label>
+        <label data-tip="How much of the accumulated miss survives each counted day. 0.96 is about a 17-day half-life.">Bias leak per day <input id="e-bias-leak" type="number" step="0.01" min="0" max="1" required></label>
+        <label data-tip="Cap on the accumulated miss, so a long stretch off target cannot move the band without bound.">Bias cap (kcal) <input id="e-bias-max" type="number" min="0" required></label>
+      </details>
 
-      <h2>Notifications</h2>
-      <label class="check">
-        <input id="n-weight-on" type="checkbox">
-        <span>Remind me to weigh in</span>
-      </label>
-      <label>At <input id="n-weight-at" type="time" required></label>
-      <label class="check">
-        <input id="n-food-on" type="checkbox">
-        <span>Remind me to tick the day off</span>
-      </label>
-      <label>At <input id="n-food-at" type="time" required></label>
-      <p id="notify-note" class="note"></p>
+      <details>
+        <summary><h2>Estimating food</h2></summary>
+        <label data-tip="Whose API the Estimate button calls. Its key goes under Connection.">LLM provider
+          <select id="e-provider">
+            <option value="anthropic">anthropic</option>
+            <option value="openai">openai</option>
+          </select>
+        </label>
+        <label data-tip="The model id sent to that provider, such as claude-sonnet-5.">LLM model <input id="e-model" required></label>
+      </details>
+
+      <details>
+        <summary><h2>Notifications</h2></summary>
+        <label class="check" data-tip="A daily nudge if no weight has been logged yet today. It stays quiet once one is.">
+          <input id="n-weight-on" type="checkbox">
+          <span>Remind me to weigh in</span>
+        </label>
+        <label data-tip="When to nudge about the weigh-in, on this device's clock.">At <input id="n-weight-at" type="time" required></label>
+        <label class="check" data-tip="A daily nudge if today has not been ticked off as fully logged.">
+          <input id="n-food-on" type="checkbox">
+          <span>Remind me to tick the day off</span>
+        </label>
+        <label data-tip="When to nudge about the food log, on this device's clock.">At <input id="n-food-at" type="time" required></label>
+        <p id="notify-note" class="note"></p>
+      </details>
 
       <button>Save config</button>
     </form>
     <p id="config-msg" class="msg"></p>
 
-    <h2>Connection</h2>
-    <form id="conn-form">
-      <label>Data repo
-        <input id="c-repo" required autocomplete="off" placeholder="https://github.com/you/gainz-data">
-      </label>
-      <label>Branch <input id="c-branch" required autocomplete="off"></label>
-      <label>GitHub token <input id="c-pat" type="password" required autocomplete="off"></label>
-      <label>Anthropic API key <input id="c-anthropic" type="password" autocomplete="off"></label>
-      <label>OpenAI API key <input id="c-openai" type="password" autocomplete="off"></label>
-      <button>Save connection</button>
-    </form>
-    <p id="conn-msg" class="msg"></p>
+    <details>
+      <summary><h2>Connection</h2></summary>
+      <form id="conn-form">
+        <label data-tip="The GitHub repo your days and config are stored in. Paste its link or type owner/repo.">Data repo
+          <input id="c-repo" required autocomplete="off" placeholder="https://github.com/you/gainz-data">
+        </label>
+        <label data-tip="Which branch of that repo to read and write.">Branch <input id="c-branch" required autocomplete="off"></label>
+        <label data-tip="A personal access token with contents write on that repo. Kept on this device only.">GitHub token <input id="c-pat" type="password" required autocomplete="off"></label>
+        <label data-tip="Used by Estimate when the provider is anthropic. Kept on this device only.">Anthropic API key <input id="c-anthropic" type="password" autocomplete="off"></label>
+        <label data-tip="Used by Estimate when the provider is openai. Kept on this device only.">OpenAI API key <input id="c-openai" type="password" autocomplete="off"></label>
+        <button>Save connection</button>
+      </form>
+      <p id="conn-msg" class="msg"></p>
+    </details>
   </section>
 </main>
 

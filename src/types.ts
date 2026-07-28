@@ -82,7 +82,7 @@ export interface Config {
   version: 1;
   bio: {
     heightCm: number;
-    /** "YYYY-MM", month precision so age is exact year-round. */
+    /** "YYYY-MM-DD". Only the age it implies is ever used. */
     birth: string;
     sex: "m" | "f";
   };
