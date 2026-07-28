@@ -100,7 +100,7 @@
     <!-- Every section starts folded: on most visits none of this is what was
          come for. The one-line explanations live here in data-tip, and main.ts
          turns each into the ⓘ next to the label. -->
-    <form id="goal-form">
+    <form id="settings-form">
       <details>
         <summary><h2>Goal</h2></summary>
         <label data-tip="Added to your estimated TDEE to get the daily calorie goal. Negative to lose weight, positive to gain.">Offset from TDEE (kcal) <input id="g-offset" type="number" required></label>
@@ -156,13 +156,8 @@
         <p id="notify-note" class="note"></p>
       </details>
 
-      <button>Save config</button>
-    </form>
-    <p id="config-msg" class="msg"></p>
-
-    <details>
-      <summary><h2>Connection</h2></summary>
-      <form id="conn-form">
+      <details>
+        <summary><h2>Connection</h2></summary>
         <label data-tip="The GitHub repo your days and config are stored in. Paste its link or type owner/repo.">Data repo
           <input id="c-repo" required autocomplete="off" placeholder="https://github.com/you/gainz-data">
         </label>
@@ -170,10 +165,14 @@
         <label data-tip="A personal access token with contents write on that repo. Kept on this device only.">GitHub token <input id="c-pat" type="password" required autocomplete="off"></label>
         <label data-tip="Used by Estimate when the provider is anthropic. Kept on this device only.">Anthropic API key <input id="c-anthropic" type="password" autocomplete="off"></label>
         <label data-tip="Used by Estimate when the provider is openai. Kept on this device only.">OpenAI API key <input id="c-openai" type="password" autocomplete="off"></label>
-        <button>Save connection</button>
-      </form>
-      <p id="conn-msg" class="msg"></p>
-    </details>
+      </details>
+
+      <!-- One button for the whole screen. Two forms meant two saves and a
+           button stranded halfway down the page; the settings are one thing to
+           the person editing them, whatever they are stored as. -->
+      <button id="settings-save">Save settings</button>
+    </form>
+    <p id="settings-msg" class="msg"></p>
   </section>
 </main>
 

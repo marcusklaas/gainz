@@ -516,15 +516,13 @@ document.addEventListener("click", (e) => {
 // A required field in a folded section still blocks the save, and the browser
 // cannot focus what it cannot show — so the section holding it is unfolded.
 // invalid does not bubble; capture is how one listener covers every field.
-for (const id of ["goal-form", "conn-form"]) {
-  $(id).addEventListener(
-    "invalid",
-    (e) => {
-      (e.target as HTMLElement).closest("details")?.setAttribute("open", "");
-    },
-    true,
-  );
-}
+$("settings-form").addEventListener(
+  "invalid",
+  (e) => {
+    (e.target as HTMLElement).closest("details")?.setAttribute("open", "");
+  },
+  true,
+);
 
 buildTips();
 
@@ -567,8 +565,40 @@ function readConfigForm(): Config {
   return withDefaults(raw);
 }
 
-$("goal-form").addEventListener("submit", async (e) => {
+function readConnForm(): Settings {
+  return {
+    repo: parseRepo(val("c-repo")),
+    branch: val("c-branch"),
+    pat: val("c-pat"),
+    anthropicKey: val("c-anthropic"),
+    openaiKey: val("c-openai"),
+  };
+}
+
+const sameSettings = (a: Settings | null, b: Settings): boolean =>
+  !!a && (Object.keys(b) as (keyof Settings)[]).every((k) => a[k] === b[k]);
+
+/**
+ * One save for both halves of the screen. They still land in two different
+ * places — the config in the repo, the credentials in localStorage — but that
+ * is a storage detail, and making the user press two buttons to act on it was
+ * letting it leak into the UI.
+ *
+ * The config is written first and unconditionally: it is a local write behind
+ * an outbox, so it cannot fail, and holding it hostage to a network check on
+ * credentials that may not even have changed would be the wrong trade.
+ */
+$("settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+
+  let s: Settings;
+  try {
+    s = readConnForm();
+  } catch (err) {
+    msg("settings-msg", (err as Error).message, "err");
+    return;
+  }
+
   const c = readConfigForm();
   saveConfig(c);
 
@@ -578,30 +608,26 @@ $("goal-form").addEventListener("submit", async (e) => {
   const wanted = c.notifications.weight.enabled || c.notifications.nutrition.enabled;
   if (wanted) $("notify-note").textContent = await requestReminders();
 
+  // Only worth a round trip when they actually changed — otherwise every edit
+  // to a number would need the network to succeed, and saving offline is a
+  // thing this app is supposed to be good at.
+  if (!sameSettings(loadSettings(), s)) {
+    msg("settings-msg", "Checking the connection…");
+    try {
+      await checkAccess(s);
+    } catch (err) {
+      // The config above is already saved and queued; only the credentials are
+      // refused, so say which half did not land.
+      msg("settings-msg", `Config saved. Connection not: ${(err as Error).message}`, "err");
+      return;
+    }
+    saveSettings(s);
+  }
+
   await sync();
   await render();
   $("config-banner").hidden = true;
-  flash("config-msg", "Saved.");
-});
-
-$("conn-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  let s: Settings;
-  try {
-    s = {
-      repo: parseRepo(val("c-repo")),
-      branch: val("c-branch"),
-      pat: val("c-pat"),
-      anthropicKey: val("c-anthropic"),
-      openaiKey: val("c-openai"),
-    };
-    await checkAccess(s);
-  } catch (err) {
-    msg("conn-msg", String((err as Error).message), "err");
-    return;
-  }
-  saveSettings(s);
-  flash("conn-msg", "Saved.");
+  flash("settings-msg", "Saved.");
 });
 
 // -------------------------------------------------------------------- start

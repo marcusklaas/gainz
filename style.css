@@ -215,6 +215,14 @@ li button { border: 0; background: none; padding: 0 .25rem; }
 #settings details[open] > summary::after { transform: rotate(90deg); }
 #settings form { margin: 0; }
 
+/* The one action on the screen, below every section and clear of the last
+   border. Marked like #f-add, the other button that commits something. */
+#settings-save {
+  margin-top: 1.25rem;
+  color: var(--fg);
+  border-color: var(--fg);
+}
+
 /* One line of explanation per setting, behind an ⓘ built by buildTips(). A
    mouse hovers it; a tap toggles .open, which is the same thing for a finger
    that has no hover to give. The bubble hangs off the label rather than the
@@ -234,6 +242,11 @@ li button { border: 0; background: none; padding: 0 .25rem; }
   left: 0;
   top: 1.6rem;
   z-index: 5;
+  /* It hangs over the input it describes, so it must not be in the way of it.
+     Transparent to the pointer, the hover ends the moment the cursor leaves the
+     ⓘ itself, the field underneath stays clickable, and a tap on the bubble
+     reaches the page and dismisses it like a tap anywhere else. */
+  pointer-events: none;
   width: max-content;
   max-width: 100%;
   padding: .45rem .6rem;
