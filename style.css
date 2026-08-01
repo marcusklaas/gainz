@@ -202,7 +202,14 @@ li button { border: 0; background: none; padding: 0 .25rem; }
 #templates .chip.blank { border-color: var(--line); color: var(--dim); }
 
 /* The one thing on the screen when a session is open, so it is the only thing
-   marked. */
+   marked.
+
+   The [hidden] rule is load-bearing, not tidiness: the attribute hides an
+   element through a UA rule of the lowest possible specificity, so the
+   display below — an id selector — silently beats it and the button stays on
+   screen with .hidden = true set on it. Any display here needs this next to
+   it. */
+#lift-resume[hidden] { display: none; }
 #lift-resume {
   display: block;
   width: 100%;
