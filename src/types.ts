@@ -33,6 +33,44 @@ export interface FoodItem {
   model?: string;
 }
 
+/** One performed set. Weight in kg, matching `Day.weight_kg` — the app has no
+ *  unit setting and is not getting one. */
+export interface LiftSet {
+  weight_kg: number;
+  reps: number;
+}
+
+/**
+ * The sets of one movement within a session. Identified by its name and nothing
+ * else: the session is the unit merges resolve at, so an id here would have no
+ * reader. Names are matched with `exerciseKey` at read time rather than being
+ * given a stored key, so nothing derived lands on disk.
+ */
+export interface Exercise {
+  name: string;
+  sets: LiftSet[];
+}
+
+/**
+ * A training session. Deliberately the same shape as a `FoodItem` — an
+ * id-bearing record in a flat array hanging off a day — so it merges the same
+ * way: two devices adding different sessions to one day both keep theirs, and
+ * two editing the same session resolve last-writer-wins at the session level.
+ *
+ * `name` doubles as the template name. There is no separate template store:
+ * selecting "Push" finds the most recent session called "Push" and prefills
+ * from it, so a template is always the last session actually done rather than a
+ * curated list that drifts out of date.
+ */
+export interface Session {
+  id: string;
+  /** "18:40", local, when the session was started. */
+  at: string;
+  /** Absent on a one-off that was never named, which is also never a template. */
+  name?: string;
+  exercises: Exercise[];
+}
+
 export interface Day {
   weight_kg?: number;
   /**
@@ -44,6 +82,9 @@ export interface Day {
    */
   goal_kcal?: number;
   items: FoodItem[];
+  /** Absent rather than empty on the overwhelming majority of days, so no file
+   *  grows a key for a feature it never used. */
+  sessions?: Session[];
   /**
    * Set only when the user says so. Absent means the day is not fully logged
    * and nothing derived reads it.
@@ -62,6 +103,40 @@ export interface Day {
 export interface MonthFile {
   version: 1;
   days: Record<DayKey, Day>;
+}
+
+// ------------------------------------------------------- the session in progress
+//
+// Local only. A draft lives in localStorage and never enters the outbox, so an
+// unfinished session is not a session — it is not in the repo, not merged, and
+// invisible to every other device and to everything derived. What localStorage
+// buys is the hour between the first set and the last: the phone locks, the tab
+// is evicted, and the session is still there. In memory alone it would not be.
+
+/** A set that may not have happened yet. Prefilled rows arrive with `done`
+ *  absent — they are last session's numbers offered as a question, and are
+ *  dropped on save unless confirmed. */
+export interface DraftSet extends LiftSet {
+  done?: boolean;
+}
+
+export interface DraftExercise {
+  name: string;
+  sets: DraftSet[];
+}
+
+/**
+ * The session being edited, new or existing. `day` and `id` are what saving
+ * writes against: an id already on that day replaces it, anything else is
+ * appended. Editing a saved session therefore goes through exactly the same
+ * screen and the same save path as creating one.
+ */
+export interface Draft {
+  day: DayKey;
+  id: string;
+  at: string;
+  name: string;
+  exercises: DraftExercise[];
 }
 
 /**

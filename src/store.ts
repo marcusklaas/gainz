@@ -22,12 +22,15 @@ import {
   type Config,
   type Day,
   type DayKey,
+  type Draft,
   type MonthFile,
   type MonthKey,
 } from "./types.js";
 
 const CACHE = "gainz.cache.";
 const OUTBOX = "gainz.outbox";
+/** The session being edited. Local only — see the note in types.ts. */
+const DRAFT = "gainz.draft";
 /** Last state we know the server had, kept so merges can tell a local deletion
  *  apart from an item another device just added. */
 const BASE = "gainz.base.";
@@ -207,6 +210,32 @@ export async function updateDay(day: DayKey, fn: (d: Day) => void): Promise<void
   markDirty(monthPath(m), day);
 }
 
+// ----------------------------------------------------------------- draft
+
+/**
+ * One at a time. A second in-progress session is not a real scenario, and the
+ * single slot is what lets the Lifts screen offer "resume" without having to
+ * ask which one.
+ */
+export function readDraft(): Draft | null {
+  const raw = localStorage.getItem(DRAFT);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as Draft;
+  } catch {
+    // A half-written or hand-mangled draft should cost the session, not the app.
+    return null;
+  }
+}
+
+export function writeDraft(d: Draft): void {
+  localStorage.setItem(DRAFT, JSON.stringify(d));
+}
+
+export function clearDraft(): void {
+  localStorage.removeItem(DRAFT);
+}
+
 // ---------------------------------------------------------------- config
 
 /**
@@ -240,11 +269,21 @@ export function saveConfig(c: Config): void {
  * the other device just added, and one of the two behaves wrongly.
  */
 function mergeDay(base: Day | undefined, local: Day, remote: Day | undefined): Day {
-  const known = new Set((base?.items ?? []).map((i) => i.id));
-  const mine = new Set(local.items.map((i) => i.id));
-  // Remote items we have never seen are the other device's additions. Anything
+  // Remote records we have never seen are the other device's additions. Anything
   // remote that we did know about but no longer hold was deleted here.
-  const added = (remote?.items ?? []).filter((i) => !known.has(i.id) && !mine.has(i.id));
+  const union = <T extends { id: string }>(b: T[] = [], l: T[] = [], r: T[] = []): T[] => {
+    const known = new Set(b.map((x) => x.id));
+    const mine = new Set(l.map((x) => x.id));
+    return [...l, ...r.filter((x) => !known.has(x.id) && !mine.has(x.id))];
+  };
+
+  const items = union(base?.items, local.items, remote?.items);
+  // Sessions merge by the same rule as items, one level up: two devices adding
+  // different sessions to a day both keep theirs, and two editing the same one
+  // resolve last-writer-wins over the whole session. Mid-session editing on two
+  // phones at once is not a real scenario; two devices logging food on one day
+  // very much is, which is why that case gets the finer-grained treatment.
+  const sessions = union(base?.sessions, local.sessions, remote?.sessions);
 
   // A scalar edited here wins; otherwise defer to the server.
   const pick = <T>(l: T | undefined, b: T | undefined, r: T | undefined) => (l !== b ? l : r);
@@ -257,7 +296,9 @@ function mergeDay(base: Day | undefined, local: Day, remote: Day | undefined): D
   const day = {} as Day;
   if (weight !== undefined) day.weight_kg = weight;
   if (goal !== undefined) day.goal_kcal = goal;
-  day.items = [...local.items, ...added].sort((a, b) => a.at.localeCompare(b.at));
+  day.items = items.sort((a, b) => a.at.localeCompare(b.at));
+  // Absent rather than empty, so a day that never held one does not gain a key.
+  if (sessions.length) day.sessions = sessions.sort((a, b) => a.at.localeCompare(b.at));
   if (logging !== undefined) day.logging = logging;
   return day;
 }

@@ -2,6 +2,19 @@ import { at, defaultConfig, FIELDS, put, withDefaults } from "./config.js";
 import { addDays, humanDay, monthOf, nowTime, todayKey } from "./dates.js";
 import { dayKcal, dayProtein, estimate, type Estimate } from "./estimate.js";
 import { checkAccess } from "./github.js";
+import {
+  confirmedSets,
+  draftOf,
+  exerciseKey,
+  exerciseNames,
+  finish,
+  lastSessionNamed,
+  newDraft,
+  sessionsOf,
+  summarise,
+  templateNames,
+  type DatedSession,
+} from "./lifts.js";
 import { estimateFood } from "./llm.js";
 import { requestReminders, updatePlan } from "./notify.js";
 import {
@@ -14,17 +27,20 @@ import {
 } from "./settings.js";
 import {
   cachedConfig,
+  clearDraft,
   flush,
   invalidateMonths,
   pendingWrites,
   readDay,
+  readDraft,
   readRange,
   refreshConfig,
   saveConfig,
   type Source,
   updateDay,
+  writeDraft,
 } from "./store.js";
-import type { Config, Day, FoodItem } from "./types.js";
+import type { Config, Day, DayKey, Draft, FoodItem } from "./types.js";
 
 function $<T extends HTMLElement = HTMLElement>(id: string): T {
   const e = document.getElementById(id);
@@ -107,7 +123,11 @@ const sections = () => document.querySelectorAll<HTMLDetailsElement>("#settings 
 
 // ----------------------------------------------------------------- screens
 
-type Screen = "today" | "trend" | "settings";
+/** "lift" is the session editor. It has no nav button — it is reached by
+ *  starting or opening a session, and leaves by going back to the list. */
+type Screen = "today" | "lifts" | "lift" | "trend" | "settings";
+
+const SCREENS = ["today", "lifts", "lift", "trend", "settings"] as const;
 
 /** Latest estimate, kept so the chart can be drawn when Trend becomes visible. */
 let latest: Estimate | null = null;
@@ -129,13 +149,17 @@ async function paintChart(): Promise<void> {
 }
 
 function show(name: Screen): void {
-  for (const s of ["today", "trend", "settings"] as const) $(s).hidden = s !== name;
+  for (const s of SCREENS) $(s).hidden = s !== name;
+  // The editor is part of Lifts as far as the nav is concerned; nothing else
+  // would be lit while it is open.
+  const tab = name === "lift" ? "lifts" : name;
   for (const b of document.querySelectorAll<HTMLButtonElement>("nav button")) {
-    b.setAttribute("aria-current", String(b.dataset["screen"] === name));
+    b.setAttribute("aria-current", String(b.dataset["screen"] === tab));
   }
   // uPlot sizes from the container, which measures zero while hidden, so the
   // chart can only be built once its section is on screen.
   if (name === "trend" && latest) void paintChart();
+  if (name === "lifts") void renderLifts();
 }
 
 for (const b of document.querySelectorAll<HTMLButtonElement>("nav button")) {
@@ -463,6 +487,315 @@ function renderItems(d: Day): void {
     ul.append(li);
   }
 }
+
+// -------------------------------------------------------------------- lifts
+//
+// Two screens: the list of what has been done, and the editor for one session.
+// The editor is not a tab because it is not a place — it is a session, opened
+// from the list and left when it is saved or thrown away.
+//
+// Nothing here writes to the repo until Save. Until then the whole session is a
+// draft in localStorage, which is what makes leaving mid-workout free: there is
+// no unsaved state in memory to warn about, and the list offers to resume.
+
+/** The window Lifts reads, kept in step with the estimator's own history so the
+ *  months are already fetched and the screen costs no extra requests. */
+const historyDays = () => cachedConfig()?.estimator.historyDays ?? 180;
+
+/** Sessions in that window, newest first. Re-read whenever one is written. */
+let sessions: DatedSession[] = [];
+
+async function loadSessions(src: Source = "cache"): Promise<void> {
+  const today = todayKey();
+  sessions = sessionsOf(await readRange(addDays(today, -historyDays()), today, src));
+}
+
+/** The session being edited, mirrored to localStorage on every change. */
+let draft: Draft | null = null;
+
+function editDraft(fn: (d: Draft) => void): void {
+  if (!draft) return;
+  fn(draft);
+  writeDraft(draft);
+  renderEditor();
+}
+
+async function renderLifts(): Promise<void> {
+  await loadSessions();
+  draft ??= readDraft();
+
+  const names = templateNames(sessions);
+  const chips = $("templates");
+  chips.replaceChildren();
+  for (const name of [...names, ""]) {
+    const b = document.createElement("button");
+    b.textContent = name || "Blank";
+    b.className = name ? "chip" : "chip blank";
+    b.addEventListener("click", () => start(name));
+    chips.append(b);
+  }
+
+  // One or the other. Offering to start a second session while one is open is
+  // the only way to lose a draft, so the offer is simply not made.
+  const resume = $<HTMLButtonElement>("lift-resume");
+  $("lift-new").hidden = draft !== null;
+  resume.hidden = draft === null;
+  if (draft) {
+    const saved = sessions.some((s) => s.session.id === draft!.id);
+    const what = draft.name || "Unnamed session";
+    resume.textContent = saved
+      ? `Resume editing — ${what} · ${humanDay(draft.day)}`
+      : `Resume — ${what} · started ${draft.at}`;
+  }
+
+  const ul = $("sessions");
+  ul.replaceChildren();
+  for (const { day: on, session } of sessions) {
+    const li = document.createElement("li");
+    const row = document.createElement("button");
+    row.className = "row";
+
+    const when = document.createElement("span");
+    when.className = "when";
+    when.textContent = humanDay(on);
+
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = session.name ?? "Unnamed";
+
+    const sum = document.createElement("span");
+    sum.className = "macros";
+    sum.textContent = summarise(session);
+
+    row.append(when, name, sum);
+    row.addEventListener("click", () => open(on, session.id));
+    li.append(row);
+    ul.append(li);
+  }
+
+  $("lifts-note").textContent = sessions.length
+    ? `Last ${historyDays()} days.`
+    : "No sessions yet. Start one above — name it, and the name becomes a template.";
+}
+
+function start(name: string): void {
+  const from = name ? lastSessionNamed(sessions, name) : null;
+  enter(newDraft(todayKey(), nowTime(), name, from));
+}
+
+function open(on: DayKey, id: string): void {
+  // Resuming the draft rather than reloading from disk: the draft is the newer
+  // of the two, and reading over it would throw away the edits it holds.
+  if (draft && draft.id === id) return enter(draft);
+  if (draft) {
+    return flash("lifts-msg", "Finish or discard the session in progress first.", "err");
+  }
+  const found = sessions.find((s) => s.day === on && s.session.id === id);
+  if (found) enter(draftOf(on, found.session));
+}
+
+function enter(d: Draft): void {
+  draft = d;
+  writeDraft(d);
+  $<HTMLInputElement>("l-name").value = d.name;
+  msg("lift-msg", "");
+  show("lift");
+  renderEditor();
+}
+
+function leave(): void {
+  draft = null;
+  show("lifts");
+}
+
+/**
+ * The set grid. Rebuilt whole on every change, which is what the items list
+ * does and is affordable at this size — and the two inputs worth keeping focus
+ * in, the session name and the add-exercise box, live outside it in the markup.
+ */
+function renderEditor(): void {
+  const d = draft;
+  if (!d) return;
+
+  $("lift-when").textContent = `${humanDay(d.day)} · started ${d.at}`;
+  $<HTMLButtonElement>("l-delete").hidden = !sessions.some((s) => s.session.id === d.id);
+
+  const list = $("l-exercises");
+  list.replaceChildren();
+
+  d.exercises.forEach((ex, ei) => {
+    const block = document.createElement("div");
+    block.className = "exercise";
+
+    const head = document.createElement("h3");
+    const title = document.createElement("span");
+    title.className = "ex-name";
+    title.textContent = ex.name;
+    const drop = document.createElement("button");
+    drop.textContent = "×";
+    drop.title = "Remove exercise";
+    drop.addEventListener("click", () =>
+      editDraft((x) => {
+        x.exercises.splice(ei, 1);
+      }),
+    );
+    head.append(title, drop);
+    block.append(head);
+
+    ex.sets.forEach((set, si) => {
+      const row = document.createElement("div");
+      // A set that has not been confirmed is last session's number, not this
+      // one's. It is shown so it can be agreed with in one tap, and dropped on
+      // save if it never was.
+      row.className = set.done ? "set" : "set ghost";
+
+      const number = (value: number, step: string, label: string, apply: (n: number) => void) => {
+        const i = document.createElement("input");
+        i.type = "number";
+        i.inputMode = "decimal";
+        i.min = "0";
+        i.step = step;
+        // Zero shows as empty, which is what a bodyweight set is: no added load.
+        // The placeholder is what then says which box is which.
+        i.value = value ? String(value) : "";
+        i.placeholder = label;
+        // Typing a number *is* saying you did it that way, so an edit confirms
+        // the row. Reps decide, because a set with none did not happen.
+        i.addEventListener("change", () =>
+          editDraft(() => {
+            apply(Number(i.value));
+            set.done = set.reps > 0;
+          }),
+        );
+        return i;
+      };
+
+      const by = document.createElement("span");
+      by.className = "by";
+      by.textContent = "×";
+
+      const act = document.createElement("button");
+      act.textContent = set.done ? "×" : "✓";
+      act.title = set.done ? "Remove set" : "Confirm as it stands";
+      act.disabled = !set.done && set.reps <= 0;
+      act.addEventListener("click", () =>
+        editDraft((x) => {
+          if (set.done) x.exercises[ei]!.sets.splice(si, 1);
+          else set.done = true;
+        }),
+      );
+
+      row.append(
+        number(set.weight_kg, "0.5", "kg", (n) => (set.weight_kg = n)),
+        by,
+        number(set.reps, "1", "reps", (n) => (set.reps = n)),
+        act,
+      );
+      block.append(row);
+    });
+
+    const add = document.createElement("button");
+    add.className = "add-set";
+    add.textContent = "+ set";
+    // Cloned from the last row and confirmed on arrival: a set you deliberately
+    // added is one you did, and the common case is that it repeats the last.
+    add.addEventListener("click", () =>
+      editDraft((x) => {
+        const sets = x.exercises[ei]!.sets;
+        const last = sets[sets.length - 1];
+        sets.push({ weight_kg: last?.weight_kg ?? 0, reps: last?.reps ?? 0, done: true });
+      }),
+    );
+    block.append(add);
+    list.append(block);
+  });
+
+  const names = exerciseNames(sessions);
+  const dl = $("exercise-names");
+  dl.replaceChildren();
+  for (const name of names) {
+    const o = document.createElement("option");
+    o.value = name;
+    dl.append(o);
+  }
+
+  $<HTMLButtonElement>("l-save").disabled = confirmedSets(d) === 0;
+}
+
+$("lift-resume").addEventListener("click", () => {
+  if (draft) enter(draft);
+});
+
+$("lift-back").addEventListener("click", () => show("lifts"));
+
+$("l-name").addEventListener("input", () => {
+  // Not through editDraft: the grid does not depend on the name, and rebuilding
+  // it under the cursor would be the one place that costs focus mid-word.
+  if (!draft) return;
+  draft.name = $<HTMLInputElement>("l-name").value;
+  writeDraft(draft);
+});
+
+$("l-add-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const name = val("l-exercise");
+  if (!name) return;
+  ($("l-add-form") as HTMLFormElement).reset();
+  // Prefilled from the last time this movement was done in *any* session, not
+  // just this template — which is the answer to "what did I lift last time" no
+  // matter which day it was on.
+  const previous = sessions
+    .flatMap((s) => s.session.exercises)
+    .find((x) => exerciseKey(x.name) === exerciseKey(name));
+  editDraft((d) => {
+    d.exercises.push({
+      name,
+      sets: previous
+        ? previous.sets.map((s) => ({ weight_kg: s.weight_kg, reps: s.reps }))
+        : [{ weight_kg: 0, reps: 0 }],
+    });
+  });
+});
+
+$("l-save").addEventListener("click", async () => {
+  if (!draft) return;
+  const d = draft;
+  const session = finish(d);
+  if (!session) return msg("lift-msg", "Confirm at least one set first.", "err");
+
+  await updateDay(d.day, (x) => {
+    const list = x.sessions ?? [];
+    const i = list.findIndex((s) => s.id === session.id);
+    if (i === -1) list.push(session);
+    else list[i] = session;
+    x.sessions = list.sort((a, b) => a.at.localeCompare(b.at));
+  });
+  clearDraft();
+  draft = null;
+  await sync();
+  show("lifts");
+  flash("lifts-msg", "Session saved.");
+});
+
+$("l-discard").addEventListener("click", () => {
+  clearDraft();
+  leave();
+});
+
+$("l-delete").addEventListener("click", async () => {
+  if (!draft) return;
+  const { day: on, id } = draft;
+  await updateDay(on, (x) => {
+    const left = (x.sessions ?? []).filter((s) => s.id !== id);
+    if (left.length) x.sessions = left;
+    else delete x.sessions;
+  });
+  clearDraft();
+  draft = null;
+  await sync();
+  show("lifts");
+  flash("lifts-msg", "Session deleted.");
+});
 
 // ----------------------------------------------------------------- settings
 

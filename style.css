@@ -192,6 +192,74 @@ li .name { flex: 1; overflow-wrap: anywhere; }
 li .macros { color: var(--dim); font-size: .85rem; white-space: nowrap; }
 li button { border: 0; background: none; padding: 0 .25rem; }
 
+/* ------------------------------------------------------------------ lifts */
+
+/* The templates. Wrapping chips rather than a select: there are only ever a
+   handful, and one tap beats open-scroll-pick on a phone. */
+#templates { display: flex; flex-wrap: wrap; gap: .4rem; margin: .35rem 0 1rem; }
+.chip.blank { color: var(--dim); }
+#templates .chip { border-color: var(--fg); color: var(--fg); }
+#templates .chip.blank { border-color: var(--line); color: var(--dim); }
+
+/* The one thing on the screen when a session is open, so it is the only thing
+   marked. */
+#lift-resume {
+  display: block;
+  width: 100%;
+  margin: .5rem 0 1rem;
+  text-align: left;
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+/* Session rows. The whole row is the tap target — a phone has no business
+   aiming at a word. */
+#sessions li { padding: 0; }
+#sessions .row {
+  display: flex;
+  gap: .5rem;
+  align-items: baseline;
+  width: 100%;
+  padding: .55rem 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  text-align: left;
+}
+#sessions .when { color: var(--dim); font-size: .85rem; flex: 0 0 5.5rem; }
+#sessions .name { flex: 1; color: var(--fg); overflow-wrap: anywhere; }
+
+#lift header { display: flex; align-items: center; gap: .5rem; margin-bottom: .25rem; }
+#lift header input { flex: 1; min-width: 0; }
+#lift-when { margin: 0 0 1rem; }
+
+.exercise { margin-bottom: 1.25rem; }
+.exercise h3 { margin-bottom: .4rem; }
+.exercise h3 .ex-name { margin-left: 0; color: var(--fg); }
+.exercise h3 button { margin-left: auto; border: 0; background: none; padding: 0 .25rem; }
+
+/* weight × reps, then the one button that either confirms or removes. */
+.set { display: flex; gap: .4rem; align-items: center; margin-bottom: .35rem; }
+.set input { flex: 1 1 0; min-width: 0; text-align: center; }
+.set .by { color: var(--dim); font-size: .85rem; }
+.set button { flex: 0 0 2.5rem; }
+
+/* Not this session's numbers — last session's, offered as a question. Dimmed
+   rather than empty, because the answer is usually "the same again", and a tap
+   on ✓ is the whole of saying so. */
+.set.ghost input { color: var(--dim); border-style: dashed; }
+.set.ghost button { color: var(--ok); border-color: var(--ok); }
+
+.add-set { width: 100%; color: var(--dim); border-style: dashed; }
+
+#l-add-form { display: flex; gap: .4rem; }
+#l-add-form input { flex: 1; min-width: 0; }
+
+#lift-actions { display: flex; gap: .4rem; margin-top: 1.5rem; }
+#l-save { flex: 1; color: var(--fg); border-color: var(--fg); }
+#l-save:disabled { color: var(--dim); border-color: var(--line); cursor: default; }
+#l-delete { color: var(--warn); }
+
 /* Settings is a stack of folded sections. The heading is the whole hit area, so
    there is nothing to aim at on a phone, and the marker is drawn by us because
    the native triangle sits on the wrong side and cannot be styled. */

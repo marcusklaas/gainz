@@ -34,6 +34,7 @@
 <main id="app" hidden>
   <nav>
     <button data-screen="today">Today</button>
+    <button data-screen="lifts">Lifts</button>
     <button data-screen="trend">Trend</button>
     <button data-screen="settings">Settings</button>
     <span id="sync"></span>
@@ -84,6 +85,54 @@
       <span>Everything logged — count this day</span>
     </label>
     <p class="note">Days left unticked are ignored by the TDEE and goal maths.</p>
+  </section>
+
+  <!-- No day scroller here, unlike Today. Food is a daily obligation and every
+       day has some; training is an event stream three or four days a week, and
+       walking the arrows past the days you did not lift is all friction. -->
+  <section id="lifts" hidden>
+    <h2>Lifts</h2>
+
+    <!-- Only one of these is ever shown: a session in progress is resumed
+         rather than competing with the offer to start another. -->
+    <div id="lift-new">
+      <p class="note">Start a session</p>
+      <div id="templates"></div>
+    </div>
+    <button id="lift-resume" hidden></button>
+
+    <ul id="sessions"></ul>
+    <p id="lifts-msg" class="msg"></p>
+    <p id="lifts-note" class="note"></p>
+  </section>
+
+  <!-- Reached from the list, not from the nav. Nothing here is written to the
+       repo until Save: the draft lives in localStorage, so leaving this screen
+       mid-session costs nothing and needs no warning. -->
+  <section id="lift" hidden>
+    <header>
+      <button id="lift-back" title="Back to Lifts">&lsaquo;</button>
+      <input id="l-name" placeholder="Session name — Push, Pull…" autocomplete="off">
+    </header>
+    <p id="lift-when" class="note"></p>
+
+    <div id="l-exercises"></div>
+
+    <form id="l-add-form">
+      <input id="l-exercise" list="exercise-names" placeholder="Add an exercise" required
+        autocomplete="off" autocapitalize="none">
+      <datalist id="exercise-names"></datalist>
+      <button>Add</button>
+    </form>
+
+    <p id="lift-msg" class="msg"></p>
+    <div id="lift-actions">
+      <button id="l-save" type="button">Save session</button>
+      <button id="l-discard" type="button">Discard</button>
+      <!-- Only for a session already in the repo, and only here rather than on
+           the list, where it would be a mistap away while scrolling. -->
+      <button id="l-delete" type="button" hidden>Delete</button>
+    </div>
   </section>
 
   <section id="trend" hidden>
