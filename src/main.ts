@@ -670,15 +670,18 @@ function renderEditor(): void {
         return i;
       };
 
-      // The unit sits outside the box rather than in a placeholder, so it is
-      // still there once the box has a number in it — which is the whole of
-      // when you need it. Read together the row is the sentence a lifter says
-      // out loud: "twenty-four kilos times ten".
-      const unit = (text: string) => {
-        const s = document.createElement("span");
-        s.className = "unit";
-        s.textContent = text;
-        return s;
+      // Same .field pairing the weight and food boxes use: the unit sits beside
+      // the input rather than in its placeholder, so it is still there once the
+      // box has a number in it — which is the whole of when you need it. Read
+      // together the row is the sentence said out loud: "24 kilos times 10".
+      const field = (input: HTMLInputElement, text: string) => {
+        const wrap = document.createElement("span");
+        wrap.className = "field";
+        const unit = document.createElement("span");
+        unit.className = "unit";
+        unit.textContent = text;
+        wrap.append(input, unit);
+        return wrap;
       };
 
       const by = document.createElement("span");
@@ -697,11 +700,9 @@ function renderEditor(): void {
       );
 
       row.append(
-        number(set.weight_kg, "0.5", "kg", (n) => (set.weight_kg = n)),
-        unit("kg"),
+        field(number(set.weight_kg, "0.5", "kg", (n) => (set.weight_kg = n)), "kg"),
         by,
-        number(set.reps, "1", "reps", (n) => (set.reps = n)),
-        unit("reps"),
+        field(number(set.reps, "1", "reps", (n) => (set.reps = n)), "reps"),
         act,
       );
       block.append(row);

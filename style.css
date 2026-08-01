@@ -71,15 +71,32 @@ textarea { width: 100%; resize: vertical; }
 button { cursor: pointer; color: var(--dim); }
 button:hover { color: var(--fg); }
 
+/* A number and the unit it is in, kept together. Every dimensioned field in the
+   app is one of these: the unit is a sibling of the box rather than its
+   placeholder, because a placeholder is only on screen while the field is
+   empty — the one time nobody needs telling what the units are. */
+.field { display: flex; align-items: center; gap: .3rem; min-width: 0; }
+.field input { min-width: 0; text-align: right; }
+.unit { color: var(--dim); font-size: .8rem; white-space: nowrap; }
+
+/* Spinners are ~20 px of arrows per box that no finger has ever used, on values
+   chosen in plate increments and whole calories rather than by stepping. The
+   step attributes stay: they still govern what the field accepts. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+
 form { margin: .75rem 0; }
 #weight-form { display: flex; gap: .4rem; }
-#weight-form input { flex: 1; min-width: 0; }
+#weight-form .field { flex: 1; }
+#weight-form input { flex: 1; }
 
 /* Description on its own line, then the two numbers and the two buttons.
    Wrapping keeps the buttons usable on a narrow phone instead of crushing the
    number fields to nothing. */
 #food-row { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; }
-#food-row input { flex: 1 1 5rem; min-width: 0; }
+#food-row .field { flex: 1 1 7rem; }
+#food-row .field input { flex: 1 1 3rem; }
 #food-row button { flex: 0 0 auto; }
 #f-add { color: var(--fg); border-color: var(--fg); }
 
@@ -261,17 +278,13 @@ li button { border: 0; background: none; padding: 0 .25rem; }
    fields are sized to their contents — three digits and a half — rather than
    sharing the row, which left two identical boxes wide enough to say nothing
    about which was which. */
+/* Unlike the wrapping rows on Today, both fields and the action sit on one line
+   whatever the width, so these are sized to their contents rather than sharing
+   the row — two identical boxes said nothing about which was which. */
 .set { display: flex; gap: .3rem; align-items: center; margin-bottom: .35rem; }
-.set input { min-width: 0; text-align: right; }
-.set input.kg { flex: 0 0 4rem; }
-.set input.reps { flex: 0 0 3.25rem; }
-/* The spinners are the other half of the width problem: ~20 px of arrows per
-   box that no one taps on a phone, and a 0.5 kg step is not how weight is
-   chosen anyway. */
-.set input::-webkit-outer-spin-button,
-.set input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.set input { -moz-appearance: textfield; appearance: textfield; }
-.set .unit { color: var(--dim); font-size: .8rem; }
+.set .field { flex: 0 0 auto; }
+.set input.kg { width: 4rem; }
+.set input.reps { width: 3.25rem; }
 .set .by { color: var(--dim); font-size: .85rem; margin: 0 .1rem; }
 .set button { flex: 0 0 2.5rem; margin-left: auto; }
 
