@@ -258,7 +258,11 @@ li button { border: 0; background: none; padding: 0 .25rem; }
 #lift-when { margin: 0 0 1rem; }
 
 .exercise { margin-bottom: 1.25rem; }
-.exercise h3 { margin-bottom: .4rem; }
+/* The shared h3 is a flex row that never needed aligning, because everywhere
+   else it holds two pieces of text of equal height. Here it holds a button
+   half again as tall, and the default stretch left the name sitting at the top
+   of its own stretched box while the × was centred in its. */
+.exercise h3 { align-items: center; margin-bottom: .4rem; }
 .exercise h3 .ex-name { margin-left: 0; color: var(--fg); }
 /* Borderless like the delete on a food item — the established shape for
    removing a row — but sized to the same box as the set buttons below it, so
