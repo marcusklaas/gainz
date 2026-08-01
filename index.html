@@ -90,9 +90,9 @@
   <!-- No day scroller here, unlike Today. Food is a daily obligation and every
        day has some; training is an event stream three or four days a week, and
        walking the arrows past the days you did not lift is all friction. -->
+  <!-- No heading: the nav already says Lifts, and repeating it is a line of the
+       screen spent telling you where you just tapped to get to. -->
   <section id="lifts" hidden>
-    <h2>Lifts</h2>
-
     <!-- Only one of these is ever shown: a session in progress is resumed
          rather than competing with the offer to start another. -->
     <div id="lift-new">
@@ -136,7 +136,9 @@
   </section>
 
   <section id="trend" hidden>
-    <h2>Trend</h2>
+    <!-- Says what is being charted, which the tab does not: "Trend" names the
+         screen, "Weight" names the line. Worth the row that Lifts just gave up. -->
+    <h2>Weight</h2>
     <div id="chart"></div>
     <p id="trend-note"></p>
     <p id="trend-basis" class="note"></p>
