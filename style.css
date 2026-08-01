@@ -191,7 +191,18 @@ h3 span {
 #chart .u-legend .u-series:first-child th { color: var(--fg); }
 
 #trend-note { margin: .75rem 0 .25rem; }
-#trend-basis { margin: .25rem 0; }
+
+/* Label and value per row, the same two-column read as a session row. */
+#week { margin: .5rem 0 0; }
+#week div {
+  display: flex;
+  gap: .5rem;
+  align-items: baseline;
+  padding: .4rem 0;
+  border-bottom: 1px solid var(--line);
+}
+#week dt { flex: 0 0 5.5rem; color: var(--dim); font-size: .85rem; }
+#week dd { flex: 1; margin: 0; font-variant-numeric: tabular-nums; }
 #chart .pts circle { fill: var(--dim); }
 #chart .ewma { fill: none; stroke: var(--ok); stroke-width: 1.5; }
 #chart text { fill: var(--dim); font-size: 8px; }

@@ -1,6 +1,13 @@
 import { at, defaultConfig, FIELDS, put, withDefaults } from "./config.js";
 import { addDays, humanDay, monthOf, nowTime, todayKey } from "./dates.js";
-import { dayKcal, dayProtein, estimate, type Estimate } from "./estimate.js";
+import {
+  dayKcal,
+  dayProtein,
+  estimate,
+  WEEK_DAYS,
+  weekSummary,
+  type Estimate,
+} from "./estimate.js";
 import { checkAccess } from "./github.js";
 import {
   confirmedSets,
@@ -327,6 +334,13 @@ async function render(src: Source = "server"): Promise<void> {
   // collapses the overlap between the two into one request.
   const history = cfg ? readRange(addDays(day, -cfg.estimator.historyDays), day, src) : null;
 
+  // Always about now, whichever day is on screen — so it cannot read from the
+  // history above, which ends at `day` and would be missing the last few days
+  // whenever you have browsed backwards. Its months are almost always already
+  // inside that range, and readMonth collapses the overlap into no new request.
+  const today = todayKey();
+  const week = readRange(addDays(today, -(WEEK_DAYS - 1)), today, src);
+
   const d = await readDay(day, src);
   $("day-label").textContent = humanDay(day);
   $<HTMLButtonElement>("next-day").disabled = day === todayKey();
@@ -341,18 +355,48 @@ async function render(src: Source = "server"): Promise<void> {
   void planReminders(cfg, d, src);
   if (!cfg) return;
 
-  const e = cfg.estimator;
-  $("trend-basis").textContent =
-    `Rate is a least-squares fit over the last ${e.tdeeWindowDays} days.` +
-    ` Line is Holt smoothing — ${e.levelHalfLifeDays}-day level half-life,` +
-    ` ${e.trendHalfLifeDays}-day trend half-life.`;
-
   const est = estimate(cfg, await history!, day);
   // Only ever pinned from a server read. The cache pass exists to put something
   // on screen fast, and a number derived from a stale month is not one to write
   // down permanently as what today was judged against.
   if (est && src === "server") await recordGoal(d, est);
   renderGoals(d, est);
+  renderWeek(await week, est);
+}
+
+/**
+ * The week as it happened. Every line survives a missing estimate except
+ * protein, whose target needs a weight to exist — so the block is never hidden,
+ * and on a fresh install it still reports what has been logged and trained.
+ */
+function renderWeek(days: Map<DayKey, Day>, est: Estimate | null): void {
+  const w = weekSummary(days, todayKey(), est?.proteinTarget ?? null);
+  const dl = $("week");
+  dl.replaceChildren();
+
+  const row = (label: string, value: string) => {
+    const line = document.createElement("div");
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    line.append(dt, dd);
+    dl.append(line);
+  };
+
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+  row("Logged", `${w.logged} of ${WEEK_DAYS} days`);
+  // Two plain numbers rather than a signed difference. "60 under" reads as a
+  // miss at a distance that is noise, and a signed weekly total is one step
+  // from an allowance to spend — which is the banking this app does not do.
+  row(
+    "Calories",
+    w.intake ? `${round(w.intake.kcal)} avg (${round(w.intake.goal)} target)` : DASH,
+  );
+  row("Protein", est && w.logged ? `hit on ${w.proteinHit} of ${w.logged}` : DASH);
+  row("Weigh-ins", `${w.weighed} of ${WEEK_DAYS}`);
+  row("Training", w.sessions ? `${plural(w.sessions, "session")} · ${plural(w.sets, "set")}` : "none");
 }
 
 /**

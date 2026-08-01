@@ -198,6 +198,79 @@ function countedKcal(day: Day | undefined): number | null {
   return dayKcal(day);
 }
 
+// ------------------------------------------------------------ week summary
+
+/** Today and the six days before it. Rolling rather than calendar, which is
+ *  why the heading names its length instead of saying "this week". */
+export const WEEK_DAYS = 7;
+
+export interface Week {
+  /** Days confirmed fully logged, by the same rule the estimator counts. */
+  logged: number;
+  weighed: number;
+  /**
+   * Both figures over the same days: the ones that are counted *and* carry a
+   * pinned target. Intake without a target cannot be compared to one, and
+   * averaging the two over different day counts would quietly make them not
+   * comparable. Null when no day in the week has both.
+   */
+  intake: { kcal: number; goal: number; days: number } | null;
+  proteinHit: number;
+  sessions: number;
+  sets: number;
+}
+
+/**
+ * What the last seven days actually held. Reported, never prescribed: there is
+ * no "remaining this week" here and there must not be, because a weekly
+ * allowance is the calorie banking the design rejects — the bias accumulator is
+ * already the soft, automatic version of that idea.
+ *
+ * The target shown is the stored `goal_kcal` rather than the corrected band
+ * centre the user saw each day. The two converge: `accumulate` is integral
+ * control, so landing on the band drives the difference to zero, and it is only
+ * non-zero while intake is persistently missing — where the gap is itself the
+ * information.
+ */
+export function weekSummary(
+  days: Map<DayKey, Day>,
+  today: DayKey,
+  proteinTarget: number | null,
+): Week {
+  const w: Week = { logged: 0, weighed: 0, intake: null, proteinHit: 0, sessions: 0, sets: 0 };
+  let kcal = 0;
+  let goal = 0;
+  let withGoal = 0;
+
+  for (let i = 0; i < WEEK_DAYS; i++) {
+    const d = days.get(addDays(today, -i));
+    if (!d) continue;
+    if (d.weight_kg) w.weighed++;
+    for (const s of d.sessions ?? []) {
+      w.sessions++;
+      for (const e of s.exercises) w.sets += e.sets.length;
+    }
+
+    // Unlike the TDEE fit, today counts here once it has been ticked. The fit
+    // excludes it because a day still in progress drags the average down; a day
+    // the user has said is complete is complete, and a summary of the last
+    // seven days that silently dropped one of them would be lying about which
+    // seven.
+    const counted = countedKcal(d);
+    if (counted === null) continue;
+    w.logged++;
+    if (proteinTarget !== null && dayProtein(d) >= proteinTarget) w.proteinHit++;
+    if (d.goal_kcal !== undefined) {
+      kcal += counted;
+      goal += d.goal_kcal;
+      withGoal++;
+    }
+  }
+
+  if (withGoal) w.intake = { kcal: kcal / withGoal, goal: goal / withGoal, days: withGoal };
+  return w;
+}
+
 /** Null until at least one weight exists — there is no basis for a target without it. */
 export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Estimate | null {
   const e = cfg.estimator;
