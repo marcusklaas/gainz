@@ -649,16 +649,16 @@ function renderEditor(): void {
       // save if it never was.
       row.className = set.done ? "set" : "set ghost";
 
-      const number = (value: number, step: string, label: string, apply: (n: number) => void) => {
+      const number = (value: number, step: string, unit: string, apply: (n: number) => void) => {
         const i = document.createElement("input");
         i.type = "number";
         i.inputMode = "decimal";
         i.min = "0";
         i.step = step;
+        i.className = unit;
+        i.setAttribute("aria-label", unit === "kg" ? "Weight in kilograms" : "Repetitions");
         // Zero shows as empty, which is what a bodyweight set is: no added load.
-        // The placeholder is what then says which box is which.
         i.value = value ? String(value) : "";
-        i.placeholder = label;
         // Typing a number *is* saying you did it that way, so an edit confirms
         // the row. Reps decide, because a set with none did not happen.
         i.addEventListener("change", () =>
@@ -668,6 +668,17 @@ function renderEditor(): void {
           }),
         );
         return i;
+      };
+
+      // The unit sits outside the box rather than in a placeholder, so it is
+      // still there once the box has a number in it — which is the whole of
+      // when you need it. Read together the row is the sentence a lifter says
+      // out loud: "twenty-four kilos times ten".
+      const unit = (text: string) => {
+        const s = document.createElement("span");
+        s.className = "unit";
+        s.textContent = text;
+        return s;
       };
 
       const by = document.createElement("span");
@@ -687,8 +698,10 @@ function renderEditor(): void {
 
       row.append(
         number(set.weight_kg, "0.5", "kg", (n) => (set.weight_kg = n)),
+        unit("kg"),
         by,
         number(set.reps, "1", "reps", (n) => (set.reps = n)),
+        unit("reps"),
         act,
       );
       block.append(row);

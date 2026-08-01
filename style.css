@@ -243,13 +243,37 @@ li button { border: 0; background: none; padding: 0 .25rem; }
 .exercise { margin-bottom: 1.25rem; }
 .exercise h3 { margin-bottom: .4rem; }
 .exercise h3 .ex-name { margin-left: 0; color: var(--fg); }
-.exercise h3 button { margin-left: auto; border: 0; background: none; padding: 0 .25rem; }
+/* Borderless like the delete on a food item — the established shape for
+   removing a row — but sized to the same box as the set buttons below it, so
+   every rightmost control on the screen is one target of one size, lined up in
+   one column. It was a 13 px glyph asking for a fingertip. */
+.exercise h3 button {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  width: 2.5rem;
+  padding: .35rem 0;
+  font-size: 1.1rem;
+  line-height: 1;
+}
 
-/* weight × reps, then the one button that either confirms or removes. */
-.set { display: flex; gap: .4rem; align-items: center; margin-bottom: .35rem; }
-.set input { flex: 1 1 0; min-width: 0; text-align: center; }
-.set .by { color: var(--dim); font-size: .85rem; }
-.set button { flex: 0 0 2.5rem; }
+/* weight × reps, then the one button that either confirms or removes. The
+   fields are sized to their contents — three digits and a half — rather than
+   sharing the row, which left two identical boxes wide enough to say nothing
+   about which was which. */
+.set { display: flex; gap: .3rem; align-items: center; margin-bottom: .35rem; }
+.set input { min-width: 0; text-align: right; }
+.set input.kg { flex: 0 0 4rem; }
+.set input.reps { flex: 0 0 3.25rem; }
+/* The spinners are the other half of the width problem: ~20 px of arrows per
+   box that no one taps on a phone, and a 0.5 kg step is not how weight is
+   chosen anyway. */
+.set input::-webkit-outer-spin-button,
+.set input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.set input { -moz-appearance: textfield; appearance: textfield; }
+.set .unit { color: var(--dim); font-size: .8rem; }
+.set .by { color: var(--dim); font-size: .85rem; margin: 0 .1rem; }
+.set button { flex: 0 0 2.5rem; margin-left: auto; }
 
 /* Not this session's numbers — last session's, offered as a question. Dimmed
    rather than empty, because the answer is usually "the same again", and a tap
