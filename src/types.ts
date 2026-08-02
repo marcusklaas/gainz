@@ -15,7 +15,10 @@ export type MonthKey = string;
 
 export interface FoodItem {
   id: string;
-  /** "19:40", local. */
+  /**
+   * When it was entered: an ISO 8601 instant in UTC, and the key the day's
+   * items are ordered by. Older files carry "19:40", local — see `atKey`.
+   */
   at: string;
   /** The description as typed. Doubles as the text the estimate was made from. */
   name: string;
@@ -64,7 +67,7 @@ export interface Exercise {
  */
 export interface Session {
   id: string;
-  /** "18:40", local, when the session was started. */
+  /** When the session was started, stamped and ordered like `FoodItem.at`. */
   at: string;
   /** Absent on a one-off that was never named, which is also never a template. */
   name?: string;
@@ -134,6 +137,8 @@ export interface DraftExercise {
 export interface Draft {
   day: DayKey;
   id: string;
+  /** Carried through to `Session.at` on save, so it dates the start of the
+   *  session rather than the moment it was finished. */
   at: string;
   name: string;
   exercises: DraftExercise[];

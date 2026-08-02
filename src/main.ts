@@ -1,5 +1,5 @@
 import { at, defaultConfig, FIELDS, put, withDefaults } from "./config.js";
-import { addDays, humanDay, monthOf, nowTime, todayKey } from "./dates.js";
+import { addDays, atTime, byAt, humanDay, monthOf, nowStamp, todayKey } from "./dates.js";
 import {
   dayKcal,
   dayProtein,
@@ -156,6 +156,11 @@ async function paintChart(): Promise<void> {
 }
 
 function show(name: Screen): void {
+  // Leaving the editor ends an edit of a past session, whether that was the
+  // back button, the nav, or a save. One place rather than each of them, so
+  // there is no route out that forgets. A session in progress is untouched:
+  // its whole contract is that it survives this.
+  if (name !== "lift") edit = null;
   for (const s of SCREENS) $(s).hidden = s !== name;
   // The editor is part of Lifts as far as the nav is concerned; nothing else
   // would be lit while it is open.
@@ -294,7 +299,7 @@ $("food-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const item: FoodItem = {
     id: crypto.randomUUID(),
-    at: nowTime(),
+    at: nowStamp(),
     name: desc(),
     kcal: num("f-kcal"),
     protein_g: num("f-protein"),
@@ -394,7 +399,7 @@ function renderWeek(days: Map<DayKey, Day>, est: Estimate | null): void {
     "Calories",
     w.intake ? `${round(w.intake.kcal)} avg (${round(w.intake.goal)} target)` : DASH,
   );
-  row("Protein", est && w.logged ? `hit on ${w.proteinHit} of ${w.logged}` : DASH);
+  row("Protein", est ? `hit on ${w.proteinHit} of ${WEEK_DAYS}` : DASH);
   row("Weigh-ins", `${w.weighed} of ${WEEK_DAYS}`);
   row("Training", w.sessions ? `${plural(w.sessions, "session")} · ${plural(w.sets, "set")}` : "none");
 }
@@ -554,13 +559,32 @@ async function loadSessions(src: Source = "cache"): Promise<void> {
   sessions = sessionsOf(await readRange(addDays(today, -historyDays()), today, src));
 }
 
-/** The session being edited, mirrored to localStorage on every change. */
+/**
+ * Two ways into the editor, and they are deliberately not the same thing.
+ *
+ * A session in progress is a `draft`: mirrored to localStorage on every change,
+ * offered as "resume" on the list, and outliving the screen and the app itself.
+ * A workout is logged over an hour with the phone going in and out of a pocket,
+ * so nothing about leaving may cost anything.
+ *
+ * A past session opened from the list is an `edit`: held in memory and nowhere
+ * else. It is already saved, so there is nothing to protect it from — backing
+ * out by any route drops the changes, which is what leaving an edit without
+ * saving means everywhere else. Keeping the two apart is also what stops an
+ * edit from presenting itself as the session you are currently doing, and what
+ * lets one be opened mid-workout without the session in progress noticing.
+ */
 let draft: Draft | null = null;
+let edit: Draft | null = null;
+
+/** Whichever of the two the editor is showing. */
+const current = (): Draft | null => edit ?? draft;
 
 function editDraft(fn: (d: Draft) => void): void {
-  if (!draft) return;
-  fn(draft);
-  writeDraft(draft);
+  const d = current();
+  if (!d) return;
+  fn(d);
+  if (d === draft) writeDraft(d);
   renderEditor();
 }
 
@@ -584,12 +608,12 @@ async function renderLifts(): Promise<void> {
   const resume = $<HTMLButtonElement>("lift-resume");
   $("lift-new").hidden = draft !== null;
   resume.hidden = draft === null;
+  // Only ever a session in progress, and so only ever one wording: a draft is
+  // now something you started and have not finished, never a past session you
+  // happened to open.
   if (draft) {
-    const saved = sessions.some((s) => s.session.id === draft!.id);
-    const what = draft.name || "Unnamed session";
-    resume.textContent = saved
-      ? `Resume editing — ${what} · ${humanDay(draft.day)}`
-      : `Resume — ${what} · started ${draft.at}`;
+    resume.textContent =
+      `Resume — ${draft.name || "Unnamed session"} · started ${atTime(draft.at)}`;
   }
 
   const ul = $("sessions");
@@ -624,32 +648,32 @@ async function renderLifts(): Promise<void> {
 
 function start(name: string): void {
   const from = name ? lastSessionNamed(sessions, name) : null;
-  enter(newDraft(todayKey(), nowTime(), name, from));
+  draft = newDraft(todayKey(), nowStamp(), name, from);
+  writeDraft(draft);
+  enter();
 }
 
+/**
+ * Always a fresh read from history rather than anything held over. Nothing an
+ * edit does is kept once it is left, so there is never a newer copy to prefer —
+ * which is exactly why opening one no longer has to refuse while a session is
+ * in progress.
+ */
 function open(on: DayKey, id: string): void {
-  // Resuming the draft rather than reloading from disk: the draft is the newer
-  // of the two, and reading over it would throw away the edits it holds.
-  if (draft && draft.id === id) return enter(draft);
-  if (draft) {
-    return flash("lifts-msg", "Finish or discard the session in progress first.", "err");
-  }
   const found = sessions.find((s) => s.day === on && s.session.id === id);
-  if (found) enter(draftOf(on, found.session));
+  if (!found) return;
+  edit = draftOf(on, found.session);
+  enter();
 }
 
-function enter(d: Draft): void {
-  draft = d;
-  writeDraft(d);
+/** Opens the editor on whichever of the two is now set. */
+function enter(): void {
+  const d = current();
+  if (!d) return;
   $<HTMLInputElement>("l-name").value = d.name;
   msg("lift-msg", "");
   show("lift");
   renderEditor();
-}
-
-function leave(): void {
-  draft = null;
-  show("lifts");
 }
 
 /**
@@ -658,11 +682,15 @@ function leave(): void {
  * in, the session name and the add-exercise box, live outside it in the markup.
  */
 function renderEditor(): void {
-  const d = draft;
+  const d = current();
   if (!d) return;
 
-  $("lift-when").textContent = `${humanDay(d.day)} · started ${d.at}`;
-  $<HTMLButtonElement>("l-delete").hidden = !sessions.some((s) => s.session.id === d.id);
+  $("lift-when").textContent = `${humanDay(d.day)} · started ${atTime(d.at)}`;
+  // Delete removes the session from the repo and so is only ever offered for one
+  // that is in it. Discard says which of the two it throws away, because in an
+  // edit it sits next to Delete and the difference is the whole point.
+  $<HTMLButtonElement>("l-delete").hidden = edit === null;
+  $("l-discard").textContent = edit ? "Discard changes" : "Discard";
 
   const list = $("l-exercises");
   list.replaceChildren();
@@ -780,18 +808,17 @@ function renderEditor(): void {
   $<HTMLButtonElement>("l-save").disabled = confirmedSets(d) === 0;
 }
 
-$("lift-resume").addEventListener("click", () => {
-  if (draft) enter(draft);
-});
+$("lift-resume").addEventListener("click", () => enter());
 
 $("lift-back").addEventListener("click", () => show("lifts"));
 
 $("l-name").addEventListener("input", () => {
   // Not through editDraft: the grid does not depend on the name, and rebuilding
   // it under the cursor would be the one place that costs focus mid-word.
-  if (!draft) return;
-  draft.name = $<HTMLInputElement>("l-name").value;
-  writeDraft(draft);
+  const d = current();
+  if (!d) return;
+  d.name = $<HTMLInputElement>("l-name").value;
+  if (d === draft) writeDraft(d);
 });
 
 $("l-add-form").addEventListener("submit", (e) => {
@@ -816,8 +843,8 @@ $("l-add-form").addEventListener("submit", (e) => {
 });
 
 $("l-save").addEventListener("click", async () => {
-  if (!draft) return;
-  const d = draft;
+  const d = current();
+  if (!d) return;
   const session = finish(d);
   if (!session) return msg("lift-msg", "Confirm at least one set first.", "err");
 
@@ -826,30 +853,38 @@ $("l-save").addEventListener("click", async () => {
     const i = list.findIndex((s) => s.id === session.id);
     if (i === -1) list.push(session);
     else list[i] = session;
-    x.sessions = list.sort((a, b) => a.at.localeCompare(b.at));
+    x.sessions = list.sort(byAt);
   });
-  clearDraft();
-  draft = null;
+  // Saving an edit finishes nothing: a session left in progress is still in
+  // progress afterwards, and show() below is what ends the edit itself.
+  if (!edit) {
+    clearDraft();
+    draft = null;
+  }
   await sync();
   show("lifts");
   flash("lifts-msg", "Session saved.");
 });
 
 $("l-discard").addEventListener("click", () => {
-  clearDraft();
-  leave();
+  // For an edit this throws away the changes only — the session it was opened
+  // from stays in the repo, and any session in progress stays in the outbox.
+  if (!edit) {
+    clearDraft();
+    draft = null;
+  }
+  show("lifts");
 });
 
 $("l-delete").addEventListener("click", async () => {
-  if (!draft) return;
-  const { day: on, id } = draft;
+  // Hidden unless this is an edit, so it can only ever be a session on disk.
+  if (!edit) return;
+  const { day: on, id } = edit;
   await updateDay(on, (x) => {
     const left = (x.sessions ?? []).filter((s) => s.id !== id);
     if (left.length) x.sessions = left;
     else delete x.sessions;
   });
-  clearDraft();
-  draft = null;
   await sync();
   show("lifts");
   flash("lifts-msg", "Session deleted.");

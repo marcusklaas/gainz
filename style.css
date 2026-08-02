@@ -273,7 +273,12 @@ li button { border: 0; background: none; padding: 0 .25rem; }
    else it holds two pieces of text of equal height. Here it holds a button
    half again as tall, and the default stretch left the name sitting at the top
    of its own stretched box while the × was centred in its. */
-.exercise h3 { align-items: center; margin-bottom: .4rem; }
+/* At label size it read as a caption over the sets. It is not a label like the
+   PROTEIN and CALORIES headings this h3 shares its rules with — those are a
+   fixed vocabulary naming a bar, and this is the name you typed. So it reads at
+   the size a food item's name does, which is what it is. Only the size needs
+   saying: `h3 span` already returns the rest of the label treatment. */
+.exercise h3 { align-items: center; margin-bottom: .4rem; font-size: 1rem; }
 .exercise h3 .ex-name { margin-left: 0; color: var(--fg); }
 /* Borderless like the delete on a food item — the established shape for
    removing a row — but sized to the same box as the set buttons below it, so

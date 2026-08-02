@@ -15,7 +15,7 @@
 import { withDefaults } from "./config.js";
 import { getFile, putFile } from "./github.js";
 import { loadSettings, type Settings } from "./settings.js";
-import { addDays, monthOf } from "./dates.js";
+import { addDays, byAt, monthOf } from "./dates.js";
 import {
   emptyDay,
   emptyMonth,
@@ -293,12 +293,17 @@ function mergeDay(base: Day | undefined, local: Day, remote: Day | undefined): D
   const goal = local.goal_kcal ?? remote?.goal_kcal;
 
   // Built in field order so the JSON diffs stay readable.
+  //
+  // Both lists are ordered by when their entries were made, which is the order
+  // they were shown in before the merge and has to survive it — `union` appends
+  // the other device's records, so without this a merge would file them all
+  // last however long ago they were entered.
   const day = {} as Day;
   if (weight !== undefined) day.weight_kg = weight;
   if (goal !== undefined) day.goal_kcal = goal;
-  day.items = items.sort((a, b) => a.at.localeCompare(b.at));
+  day.items = items.sort(byAt);
   // Absent rather than empty, so a day that never held one does not gain a key.
-  if (sessions.length) day.sessions = sessions.sort((a, b) => a.at.localeCompare(b.at));
+  if (sessions.length) day.sessions = sessions.sort(byAt);
   if (logging !== undefined) day.logging = logging;
   return day;
 }

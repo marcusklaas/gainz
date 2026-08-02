@@ -215,6 +215,8 @@ export interface Week {
    * comparable. Null when no day in the week has both.
    */
   intake: { kcal: number; goal: number; days: number } | null;
+  /** Days that cleared the protein target, out of `WEEK_DAYS` — not out of
+   *  `logged`, which is the one figure here that is not about intake. */
   proteinHit: number;
   sessions: number;
   sets: number;
@@ -251,6 +253,14 @@ export function weekSummary(
       for (const e of s.exercises) w.sets += e.sets.length;
     }
 
+    // Judged on every day in the window, which is why it is counted before the
+    // check below rather than after it. Protein is hit by what was eaten, and a
+    // day whose logging was never confirmed can clear the target perfectly well.
+    // Intake cannot be read that way — an unconfirmed day looks low simply
+    // because it is unfinished — and that difference, not an oversight, is why
+    // the two lines are counted over different denominators.
+    if (proteinTarget !== null && dayProtein(d) >= proteinTarget) w.proteinHit++;
+
     // Unlike the TDEE fit, today counts here once it has been ticked. The fit
     // excludes it because a day still in progress drags the average down; a day
     // the user has said is complete is complete, and a summary of the last
@@ -259,7 +269,6 @@ export function weekSummary(
     const counted = countedKcal(d);
     if (counted === null) continue;
     w.logged++;
-    if (proteinTarget !== null && dayProtein(d) >= proteinTarget) w.proteinHit++;
     if (d.goal_kcal !== undefined) {
       kcal += counted;
       goal += d.goal_kcal;

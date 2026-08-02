@@ -119,9 +119,11 @@
     <p id="lifts-note" class="note"></p>
   </section>
 
-  <!-- Reached from the list, not from the nav. Nothing here is written to the
-       repo until Save: the draft lives in localStorage, so leaving this screen
-       mid-session costs nothing and needs no warning. -->
+  <!-- Reached from the list, not from the nav, and holding one of two things.
+       A session in progress lives in localStorage, so leaving this screen
+       mid-session costs nothing and needs no warning. A past session opened to
+       be edited is held in memory only: it is already saved, and leaving
+       without saving drops the changes the way it does anywhere else. -->
   <section id="lift" hidden>
     <header>
       <button id="lift-back" title="Back to Lifts">&lsaquo;</button>

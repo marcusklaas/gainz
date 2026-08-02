@@ -1,6 +1,7 @@
 // Sessions, templates and exercise identity. Pure functions over the same
 // `Map<DayKey, Day>` the estimator takes: no storage, no DOM, nothing derived
 // persisted. The e1RM series and everything that reads it will land here too.
+import { atKey } from "./dates.js";
 import type {
   Day,
   DayKey,
@@ -42,7 +43,9 @@ export function sessionsOf(days: Map<DayKey, Day>): DatedSession[] {
   for (const [day, d] of days) {
     for (const session of d.sessions ?? []) out.push({ day, session });
   }
-  return out.sort((a, b) => (b.day + b.session.at).localeCompare(a.day + a.session.at));
+  // Day first, so it dominates; the stamp only orders sessions within one day.
+  const key = ({ day, session }: DatedSession) => day + atKey(session.at);
+  return out.sort((a, b) => key(b).localeCompare(key(a)));
 }
 
 /** Distinct values of `key` across sessions, most recently used first. A Map
