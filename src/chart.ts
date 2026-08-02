@@ -9,8 +9,22 @@ import uPlot from "../vendor/uPlot.esm.js";
 import { parseDay } from "./dates.js";
 import type { Sample } from "./estimate.js";
 
-const HEIGHT = 240;
 const DAY_SECONDS = 86_400;
+
+/**
+ * Height from width, so a chart given a desktop column does not stay a phone's
+ * letterbox. The floor is the height the chart has always had, which is what a
+ * phone gets: at 343 px of content the ratio asks for far less, and the shape
+ * only starts growing past about 570 px. The ceiling stops a wide window from
+ * turning the trend into a cliff — the y-axis spans a couple of kilos, and how
+ * steep that looks is a property of the aspect ratio, not of the data.
+ */
+const MIN_HEIGHT = 240;
+const MAX_HEIGHT = 340;
+const RATIO = 0.42;
+
+const heightFor = (width: number) =>
+  Math.round(Math.min(Math.max(width * RATIO, MIN_HEIGHT), MAX_HEIGHT));
 
 /**
  * How much history the chart opens on. Recent enough that day-to-day movement
@@ -149,7 +163,7 @@ function options(width: number): uPlot.Options {
 
   return {
     width,
-    height: HEIGHT,
+    height: heightFor(width),
     padding: [8, 8, 0, 0],
     cursor: { drag: { x: false, y: false }, points: { size: 7 } },
     legend: { show: true, live: true, markers: { show: false } },
@@ -213,7 +227,7 @@ export function drawTrend(el: HTMLElement, samples: Sample[], ewma: Sample[]): v
   if (plot) {
     // setData re-ranges x to the full extent, so the view has to be reapplied.
     plot.setData(data);
-    plot.setSize({ width, height: HEIGHT });
+    plot.setSize({ width, height: heightFor(width) });
     plot.setScale("x", defaultView());
     return;
   }
@@ -222,7 +236,11 @@ export function drawTrend(el: HTMLElement, samples: Sample[], ewma: Sample[]): v
   plot = new uPlot(options(width), data, el);
   plot.setScale("x", defaultView());
 
+  // Both dimensions, since the height is now a function of the width: a window
+  // dragged wider, a phone turned sideways, or the sidebar appearing at 48rem
+  // all change the shape and not just the span.
   new ResizeObserver(() => {
-    if (plot && el.clientWidth) plot.setSize({ width: el.clientWidth, height: HEIGHT });
+    const w = el.clientWidth;
+    if (plot && w) plot.setSize({ width: w, height: heightFor(w) });
   }).observe(el);
 }

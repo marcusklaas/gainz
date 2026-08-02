@@ -12,6 +12,9 @@
 body {
   margin: 0 auto;
   padding: 1rem;
+  /* Clears the fixed tab bar. The inset is 0 unless the viewport covers it, so
+     it costs nothing on the devices that do not have a home indicator. */
+  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
   max-width: 30rem;
   font: 16px/1.5 system-ui, sans-serif;
   color: var(--fg);
@@ -21,16 +24,67 @@ body {
 h1, h2 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 .5rem; }
 h1 { margin-top: 0; }
 
+/* A tab bar across the bottom, where a thumb already is. Fixed rather than
+   sticky: the nav is the first thing in the document, and a sticky element
+   still occupies its place in the flow, so it would reserve a strip at the top
+   and slide down into view — which is not the same shape at all. Fixed takes it
+   out of the flow entirely and body's padding-bottom pays for the space.
+
+   It is first in the DOM and last on the screen, and that is the right way
+   round: source order is what a screen reader and the tab key follow, and the
+   navigation belongs at the front of both. */
 nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
   display: flex;
-  gap: .5rem;
-  align-items: center;
-  margin-bottom: 1rem;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: .5rem;
+  align-items: stretch;
+  /* The inset is what lets the filled tab read as a shape sitting in the bar
+     rather than a block wedged into its corner. */
+  gap: .25rem;
+  padding: .35rem .5rem calc(.35rem + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--bg);
 }
-nav button[aria-current="true"] { color: var(--fg); border-color: var(--fg); }
-#sync { margin-left: auto; color: var(--dim); font-size: .8rem; }
+/* Equal shares of the width, so the targets are uniform and the one you want is
+   always in the same place. Borderless: four bordered boxes edge to edge read as
+   a toolbar rather than a bar you are somewhere in. */
+nav button {
+  flex: 1;
+  min-width: 0;
+  padding: .7rem .25rem;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font-size: .9rem;
+}
+/* The filled row is the marker at both sizes — it is the same rule, not two
+   that happen to match. Colour alone is a weak thing to have to find, and a
+   4 px radius is what every other box in the app is drawn with. */
+nav button[aria-current="true"] {
+  color: var(--fg);
+  border-color: var(--fg);
+  background: #1f2229;
+}
+
+/* Sits above the bar rather than in it: it is empty almost always, and giving
+   it a share of a four-way split would either squeeze the tabs or leave a hole
+   where nothing ever appears. Chip-styled because it now floats over content. */
+#sync {
+  position: absolute;
+  right: .5rem;
+  bottom: 100%;
+  margin-bottom: .5rem;
+  padding: .1rem .45rem;
+  color: var(--dim);
+  font-size: .8rem;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+#sync:empty { display: none; }
 
 #today header {
   display: flex;
@@ -373,7 +427,11 @@ li button { border: 0; background: none; padding: 0 .25rem; }
   position: absolute;
   left: 0;
   top: 1.6rem;
-  z-index: 5;
+  /* Above the tab bar. The last setting on the screen sits right on top of it,
+     and half an explanation disappearing under the nav is worse than one
+     briefly covering it — the bubble is transient and pointer-events: none, so
+     a tap aimed at a tab still gets there. */
+  z-index: 20;
   /* It hangs over the input it describes, so it must not be in the way of it.
      Transparent to the pointer, the hover ends the moment the cursor leaves the
      ⓘ itself, the field underneath stays clickable, and a tap on the bubble
@@ -405,3 +463,78 @@ li button { border: 0; background: none; padding: 0 .25rem; }
 .msg:empty { display: none; }
 .msg.ok { color: var(--ok); }
 .msg.err { color: var(--warn); }
+
+/* -------------------------------------------------------- wider than a phone */
+
+/* Everything above this line is the phone, unchanged and untouched by what
+   follows. From 48rem — an iPad in portrait, a laptop, a phone turned sideways —
+   the tab bar becomes a sidebar and the column widens a little.
+
+   Landscape phones are deliberately included. Vertical space is the scarce one
+   there, and a bar across the bottom spends it at exactly the moment there is
+   least to spend.
+
+   The HTML is the same either way. It can be, because nav and the sections are
+   already siblings: nav takes the first column, and every section is placed in
+   the same cell of the second, which they can share because only one of them is
+   ever without [hidden]. */
+@media (min-width: 48rem) {
+  body {
+    max-width: 64rem;
+    padding-bottom: 1rem;
+  }
+
+  /* Setup is prose and a short form, and neither wants the full width. It sits
+     outside #app, so the column rules below do not reach it. */
+  #setup { max-width: 34rem; }
+
+  /* Load-bearing, and the same trap as #lift-resume: [hidden] hides through a
+     UA rule of the lowest possible specificity, so the id selector below would
+     quietly beat it and show the app behind the setup screen. */
+  #app[hidden] { display: none; }
+  #app {
+    display: grid;
+    grid-template-columns: 11rem 1fr;
+    gap: 0 2rem;
+    align-items: start;
+  }
+
+  /* Back into the flow, in the first column, and following the page down. */
+  nav {
+    position: sticky;
+    top: 1rem;
+    bottom: auto;
+    left: auto;
+    right: auto;
+    grid-column: 1;
+    grid-row: 1;
+    flex-direction: column;
+    gap: .15rem;
+    padding: 0;
+    border-top: 0;
+    background: none;
+  }
+  /* Read as a list, so: left-aligned, and at the size of the text it sits
+     beside. The fill marking the current one is inherited from the bar — only
+     the shape of the row changes here, not what being on it looks like. */
+  nav button {
+    padding: .45rem .6rem;
+    text-align: left;
+    font-size: 1rem;
+  }
+
+  #sync {
+    position: static;
+    margin: .75rem 0 0;
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+
+  /* A form or a paragraph gets no better for being wider, so the column grows
+     only a little past the phone's 30rem. The chart is the exception — it is
+     the one thing here that is genuinely short of room — and it gets its own
+     width, which is most of the point of the sidebar. */
+  #app > section { grid-column: 2; grid-row: 1; max-width: 34rem; }
+  #app > #trend { max-width: 52rem; }
+}
