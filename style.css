@@ -5,6 +5,15 @@
   --line: #2c2f36;
   --ok: #6bbf59;
   --warn: #d9a441;
+
+  /* The content column, and the sidebar it sits beside above 48rem. One column
+     of one width at every size: a phone gets all of it there is, and everything
+     wider stops at --col, which is where a line of this text stops being
+     comfortable to read. The two lengths are named because the body width is
+     derived from them rather than chosen separately — see the media query. */
+  --col: 34rem;
+  --side: 11rem;
+  --gap: 2rem;
 }
 
 * { box-sizing: border-box; }
@@ -15,7 +24,7 @@ body {
   /* Clears the fixed tab bar. The inset is 0 unless the viewport covers it, so
      it costs nothing on the devices that do not have a home indicator. */
   padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
-  max-width: 30rem;
+  max-width: var(--col);
   font: 16px/1.5 system-ui, sans-serif;
   color: var(--fg);
   background: var(--bg);
@@ -468,7 +477,8 @@ li button { border: 0; background: none; padding: 0 .25rem; }
 
 /* Everything above this line is the phone, unchanged and untouched by what
    follows. From 48rem — an iPad in portrait, a laptop, a phone turned sideways —
-   the tab bar becomes a sidebar and the column widens a little.
+   the tab bar becomes a sidebar. The column does not change width here: it is
+   --col above and below, and the sidebar is what the extra room buys.
 
    Landscape phones are deliberately included. Vertical space is the scarce one
    there, and a bar across the bottom spends it at exactly the moment there is
@@ -480,13 +490,16 @@ li button { border: 0; background: none; padding: 0 .25rem; }
    ever without [hidden]. */
 @media (min-width: 48rem) {
   body {
-    max-width: 64rem;
+    /* Exactly what the two columns need, so the pair sits centred with nothing
+       left over. Wider than this and the sidebar and its column stay put on the
+       left while the empty half of the body grows to their right. */
+    max-width: calc(var(--side) + var(--gap) + var(--col));
     padding-bottom: 1rem;
   }
 
-  /* Setup is prose and a short form, and neither wants the full width. It sits
-     outside #app, so the column rules below do not reach it. */
-  #setup { max-width: 34rem; }
+  /* Setup sits outside #app, so the column rules below do not reach it, and the
+     body is now wide enough for two columns. Back to one. */
+  #setup { max-width: var(--col); }
 
   /* Load-bearing, and the same trap as #lift-resume: [hidden] hides through a
      UA rule of the lowest possible specificity, so the id selector below would
@@ -494,8 +507,8 @@ li button { border: 0; background: none; padding: 0 .25rem; }
   #app[hidden] { display: none; }
   #app {
     display: grid;
-    grid-template-columns: 11rem 1fr;
-    gap: 0 2rem;
+    grid-template-columns: var(--side) 1fr;
+    gap: 0 var(--gap);
     align-items: start;
   }
 
@@ -531,12 +544,11 @@ li button { border: 0; background: none; padding: 0 .25rem; }
     background: none;
   }
 
-  /* One width for every screen, a little past the phone's 30rem — which the
-     chart gets too, and is enough for it. Trend had its own wider column for a
-     while, and the width was never the problem: the sidebar holds still
-     between tabs, so the whole of the difference landed on one moving edge and
-     read as arriving at a different page rather than a wider one. A form or a
-     paragraph gets no better for being wider anyway, and the 4rem everything
-     gained here is most of what the chart was short of. */
-  #app > section { grid-column: 2; grid-row: 1; max-width: 34rem; }
+  /* All in the one cell, at the one width — the same --col the body is capped
+     at below this breakpoint, so nothing about the column changes as the
+     sidebar appears. Trend had a wider column of its own for a while, and the
+     width was never the problem: the sidebar holds still between tabs, so the
+     whole of the difference landed on one moving edge and read as arriving at a
+     different page rather than a wider one. */
+  #app > section { grid-column: 2; grid-row: 1; max-width: var(--col); }
 }
