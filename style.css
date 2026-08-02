@@ -531,10 +531,12 @@ li button { border: 0; background: none; padding: 0 .25rem; }
     background: none;
   }
 
-  /* A form or a paragraph gets no better for being wider, so the column grows
-     only a little past the phone's 30rem. The chart is the exception — it is
-     the one thing here that is genuinely short of room — and it gets its own
-     width, which is most of the point of the sidebar. */
+  /* One width for every screen, a little past the phone's 30rem — which the
+     chart gets too, and is enough for it. Trend had its own wider column for a
+     while, and the width was never the problem: the sidebar holds still
+     between tabs, so the whole of the difference landed on one moving edge and
+     read as arriving at a different page rather than a wider one. A form or a
+     paragraph gets no better for being wider anyway, and the 4rem everything
+     gained here is most of what the chart was short of. */
   #app > section { grid-column: 2; grid-row: 1; max-width: 34rem; }
-  #app > #trend { max-width: 52rem; }
 }

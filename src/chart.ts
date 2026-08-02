@@ -12,19 +12,13 @@ import type { Sample } from "./estimate.js";
 const DAY_SECONDS = 86_400;
 
 /**
- * Height from width, so a chart given a desktop column does not stay a phone's
- * letterbox. The floor is the height the chart has always had, which is what a
- * phone gets: at 343 px of content the ratio asks for far less, and the shape
- * only starts growing past about 570 px. The ceiling stops a wide window from
- * turning the trend into a cliff — the y-axis spans a couple of kilos, and how
- * steep that looks is a property of the aspect ratio, not of the data.
+ * Fixed, and the same everywhere. Every screen is one column of one width now,
+ * so a height derived from the width would be answering a question nothing
+ * asks: it came out at this constant on a phone and within a few pixels of it
+ * on a desktop. A little taller than the 240 it was, because the y-axis spans a
+ * couple of kilos and the extra room is where the trend line becomes legible.
  */
-const MIN_HEIGHT = 240;
-const MAX_HEIGHT = 340;
-const RATIO = 0.42;
-
-const heightFor = (width: number) =>
-  Math.round(Math.min(Math.max(width * RATIO, MIN_HEIGHT), MAX_HEIGHT));
+const HEIGHT = 280;
 
 /**
  * How much history the chart opens on. Recent enough that day-to-day movement
@@ -163,7 +157,7 @@ function options(width: number): uPlot.Options {
 
   return {
     width,
-    height: heightFor(width),
+    height: HEIGHT,
     padding: [8, 8, 0, 0],
     cursor: { drag: { x: false, y: false }, points: { size: 7 } },
     legend: { show: true, live: true, markers: { show: false } },
@@ -227,7 +221,7 @@ export function drawTrend(el: HTMLElement, samples: Sample[], ewma: Sample[]): v
   if (plot) {
     // setData re-ranges x to the full extent, so the view has to be reapplied.
     plot.setData(data);
-    plot.setSize({ width, height: heightFor(width) });
+    plot.setSize({ width, height: HEIGHT });
     plot.setScale("x", defaultView());
     return;
   }
@@ -236,11 +230,11 @@ export function drawTrend(el: HTMLElement, samples: Sample[], ewma: Sample[]): v
   plot = new uPlot(options(width), data, el);
   plot.setScale("x", defaultView());
 
-  // Both dimensions, since the height is now a function of the width: a window
-  // dragged wider, a phone turned sideways, or the sidebar appearing at 48rem
-  // all change the shape and not just the span.
+  // Width only — the height is fixed. Still needed for a window dragged wider,
+  // a phone turned sideways, or the sidebar appearing at 48rem, each of which
+  // changes how much span fits without uPlot hearing about it.
   new ResizeObserver(() => {
     const w = el.clientWidth;
-    if (plot && w) plot.setSize({ width: w, height: heightFor(w) });
+    if (plot && w) plot.setSize({ width: w, height: HEIGHT });
   }).observe(el);
 }
