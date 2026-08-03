@@ -8,6 +8,15 @@ export const DAYS_PER_WEEK = 7;
 /** Mifflin-St Jeor published coefficients. */
 export const MIFFLIN = { weight: 10, height: 6.25, age: 5, maleOffset: 5, femaleOffset: -161 };
 
+/**
+ * Epley's divisor: e1RM = weight × (1 + reps / 30). Which formula is used
+ * barely matters here — Brzycki and Lombardi land within a point of it over ten
+ * weeks, because almost every set in the log is at the same reps and the rep
+ * term cancels between two sessions that share them. Epley is the one people
+ * recognise.
+ */
+export const EPLEY_REPS = 30;
+
 /** Local calendar date, "YYYY-MM-DD". Never a UTC timestamp. */
 export type DayKey = string;
 /** "YYYY-MM" */
@@ -183,6 +192,10 @@ export interface Config {
     biasLeak: number;
     /** Anti-windup cap on the accumulated bias, kcal. */
     biasMaxKcal: number;
+  };
+  strength: {
+    /** How far back the strength verdict and its decomposition are fitted. */
+    windowDays: number;
   };
   llm: { provider: Provider; model: string };
   notifications: Notifications;

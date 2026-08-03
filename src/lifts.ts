@@ -1,14 +1,15 @@
-// Sessions, templates and exercise identity. Pure functions over the same
-// `Map<DayKey, Day>` the estimator takes: no storage, no DOM, nothing derived
-// persisted. The e1RM series and everything that reads it will land here too.
-import { atKey } from "./dates.js";
-import type {
-  Day,
-  DayKey,
-  Draft,
-  DraftExercise,
-  Exercise,
-  Session,
+// Sessions, templates and exercise identity, plus the strength index the log
+// is read for. Pure functions over the same `Map<DayKey, Day>` the estimator
+// takes: no storage, no DOM, nothing derived persisted.
+import { addDays, atKey, daysBetween } from "./dates.js";
+import {
+  EPLEY_REPS,
+  type Day,
+  type DayKey,
+  type Draft,
+  type DraftExercise,
+  type Exercise,
+  type Session,
 } from "./types.js";
 
 /** A session as it sits in history: the record, plus the day it belongs to. */
@@ -157,4 +158,282 @@ export function summarise(s: Session): string {
   const sets = s.exercises.reduce((n, e) => n + e.sets.length, 0);
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   return `${plural(s.exercises.length, "exercise")} · ${plural(sets, "set")}`;
+}
+
+// -------------------------------------------------------- the strength index
+//
+// One number for "am I getting stronger", built the way a chained price index
+// is built, because it is the same problem. Sessions alternate Push and Pull,
+// so no two consecutive sessions share a single exercise and nothing can be
+// compared session to session. Exercises arrive, drift to the back of the
+// rotation and leave. The aggregate must not move merely because the basket
+// did — so every exercise is matched against its own previous appearance, the
+// matched changes are pooled, and the result is chained.
+//
+// The lifting-side twin of what estimate() does for weight: one noisy series
+// in, a trend and an honest error bar out. See STRENGTH.md for what was
+// measured, what was rejected, and what is still unverified.
+
+/** One exercise on one day: the atom everything below is built from. */
+export interface LiftPoint {
+  day: DayKey;
+  /** `exerciseKey(name)` — what makes two spellings one series. */
+  key: string;
+  /** The spelling used that day, for display. */
+  name: string;
+  /** log of the best set's Epley e1RM. */
+  x: number;
+}
+
+/**
+ * Logs, because strength changes proportionally, and because every e1RM formula
+ * has the shape `weight × f(reps)` — so the log splits into `log weight +
+ * log f(reps)` and the rep term cancels exactly between two sessions that used
+ * the same reps, which is nearly all of them.
+ *
+ * The best set, not the average of the sets. The average is marginally quieter
+ * and much easier to fool: a warm-up ramp that later becomes three straight sets
+ * at the top weight reads as an enormous gain, and an exercise cut from three
+ * sets to one reads as an enormous loss, in both cases because the programming
+ * changed and not the strength. The top set is the strength proxy; the rest is
+ * volume, which is a different thing this is not measuring.
+ *
+ * One point per exercise per *day*, not per session — two sessions on one day
+ * are zero days apart, and the index below divides by the days a link covers.
+ * Taking the better of the two is the same top-set rule one level up.
+ */
+export function e1rmPoints(list: DatedSession[]): LiftPoint[] {
+  const best = new Map<string, LiftPoint>();
+  for (const { day, session } of list) {
+    for (const ex of session.exercises) {
+      // A set with no load is not a lighter set of the same movement, it is no
+      // reading at all — bodyweight work cannot enter until the added weight is
+      // known. Reps decide alongside it: a set of none did not happen.
+      const top = Math.max(
+        0,
+        ...ex.sets.filter((s) => s.weight_kg > 0 && s.reps > 0)
+          .map((s) => s.weight_kg * (1 + s.reps / EPLEY_REPS)),
+      );
+      if (!top) continue;
+
+      const key = exerciseKey(ex.name);
+      const id = `${day} ${key}`;
+      const seen = best.get(id);
+      if (!seen || top > Math.exp(seen.x)) best.set(id, { day, key, name: ex.name, x: Math.log(top) });
+    }
+  }
+  return [...best.values()].sort((a, b) => a.day.localeCompare(b.day));
+}
+
+/** The points of one day at a time, oldest first. */
+function byDay(points: LiftPoint[]): LiftPoint[][] {
+  const days = new Map<DayKey, LiftPoint[]>();
+  for (const p of points) days.set(p.day, [...(days.get(p.day) ?? []), p]);
+  return [...days.values()];
+}
+
+/** A level, in log points, on the day it was reached. */
+export interface IndexPoint {
+  day: DayKey;
+  x: number;
+}
+
+/**
+ * The chained index:
+ *
+ *     SI += (Σ log-change of the exercises trained)
+ *           ÷ (Σ exercise-days that covers)
+ *           × (days since the previous session)
+ *
+ * The pooled rate at which the things you actually trained are improving,
+ * integrated over time. An exercise appearing for the first time has nothing to
+ * be matched against and so contributes nothing: it can join the index, never
+ * move it. That is what makes adding exercises unable to inflate anything.
+ *
+ * The denominator is exercise-days rather than the size of the basket. The two
+ * are identical whenever everything is trained on the same cadence, and part
+ * company when cadences differ — which is the real case. An exercise drifting
+ * toward the back of the rotation keeps occupying a slot in a basket-sized
+ * denominator while contributing no change, which understates the rate badly.
+ * Dividing by the time actually covered is self-normalising: an exercise counts
+ * exactly when, and as much as, it informs. It costs some wander, and that is
+ * the better trade — a bias makes the number wrong, wander only makes it
+ * imprecise, and the verdict below carries its own error bar regardless.
+ *
+ * The level has no absolute meaning and by construction cannot acquire one: it
+ * is defined only up to an additive constant. It answers "how much stronger
+ * than then", never "how strong". The first point is therefore always zero, and
+ * the chart rebases from there.
+ *
+ * Every link reads only data at or before its own day, so yesterday's value
+ * never moves when today is logged.
+ */
+export function strengthIndex(points: LiftPoint[]): IndexPoint[] {
+  const out: IndexPoint[] = [];
+  const previous = new Map<string, LiftPoint>();
+  let si = 0;
+  let before: DayKey | null = null;
+
+  for (const today of byDay(points)) {
+    const day = today[0]!.day;
+    let change = 0; // Σ log-change over the matched exercises
+    let covered = 0; // Σ days each of those matches spans
+
+    for (const p of today) {
+      const was = previous.get(p.key);
+      if (!was) continue;
+      change += p.x - was.x;
+      covered += daysBetween(was.day, day);
+    }
+    if (covered > 0 && before) si += (change / covered) * daysBetween(before, day);
+
+    for (const p of today) previous.set(p.key, p);
+    before = day;
+    out.push({ day, x: si });
+  }
+  return out;
+}
+
+/** A fitted rate and how well it is pinned down, over a stated window. */
+export interface Fit {
+  /** Log points per day. */
+  perDay: number;
+  stdErrPerDay: number;
+  /** Exercise-days the fit saw, and how many distinct exercises they covered. */
+  points: number;
+  exercises: number;
+  windowDays: number;
+}
+
+/**
+ * OLS of `x` on day, with one intercept per exercise, over the window.
+ *
+ * One intercept per exercise means only within-exercise change is fitted and
+ * each exercise's own level is absorbed — which is again what stops adding
+ * exercises from inflating anything, and what lets the fit use every session in
+ * the window rather than only its endpoints. Fitting the index instead would
+ * give the same point estimate and a dishonest interval: index points share
+ * measurement noise with their neighbours, which OLS assumes away, and a
+ * two-sigma test on them fires on a fifth of histories that are genuinely flat.
+ * So the index is the picture and this is the verdict.
+ *
+ * Implemented by demeaning within each exercise, which is the same fit without
+ * building the dummy columns. An exercise appearing once in the window demeans
+ * to nothing and consumes exactly the one degree of freedom its intercept
+ * costs, so it is dropped outright: including it would change no part of the
+ * arithmetic and would overstate what the number was built from, which is the
+ * one thing the counts below are there to report.
+ */
+export function panelFit(all: LiftPoint[], windowDays: number): Fit | null {
+  const groups = new Map<string, LiftPoint[]>();
+  for (const p of all) groups.set(p.key, [...(groups.get(p.key) ?? []), p]);
+  for (const [key, g] of groups) if (g.length < 2) groups.delete(key);
+
+  const points = [...groups.values()].flat();
+  const df = points.length - groups.size - 1;
+  if (df < 1) return null;
+
+  const origin = points[0]!.day;
+  const mean = (ns: number[]) => ns.reduce((a, b) => a + b, 0) / ns.length;
+  const centred: { t: number; x: number }[] = [];
+  let stt = 0;
+  let stx = 0;
+
+  for (const g of groups.values()) {
+    const mt = mean(g.map((p) => daysBetween(origin, p.day)));
+    const mx = mean(g.map((p) => p.x));
+    for (const p of g) {
+      const t = daysBetween(origin, p.day) - mt;
+      const x = p.x - mx;
+      centred.push({ t, x });
+      stt += t * t;
+      stx += t * x;
+    }
+  }
+  if (stt === 0) return null; // every point of every exercise on one day
+
+  const perDay = stx / stt;
+  let sse = 0;
+  for (const c of centred) sse += (c.x - perDay * c.t) ** 2;
+
+  return {
+    perDay,
+    stdErrPerDay: Math.sqrt(sse / df / stt),
+    points: points.length,
+    exercises: groups.size,
+    windowDays,
+  };
+}
+
+/**
+ * The fit as a total over its own window, as a proportion: 0.45 is +45%.
+ * Reported as a total rather than a rate because the window is the honest unit
+ * of the computation. `sigmas` walks the interval out; two of them is what the
+ * app shows and what decides whether it says anything at all.
+ */
+export const fitTotal = (f: Fit, sigmas = 0): number =>
+  Math.exp((f.perDay + sigmas * f.stdErrPerDay) * f.windowDays) - 1;
+
+/** Whether two standard errors cover zero — in which case there is no verdict
+ *  to give, and saying so is the whole of what the app should say. */
+export const withinNoise = (f: Fit): boolean => Math.abs(f.perDay) < 2 * f.stdErrPerDay;
+
+export interface Strength {
+  /** The chained level, one point per training day, oldest first. */
+  index: IndexPoint[];
+  /** The verdict over the last `windowDays`. Null until there is enough. */
+  fit: Fit | null;
+  /** The same fit one exercise at a time, biggest gain first. */
+  byExercise: { name: string; fit: Fit }[];
+}
+
+/**
+ * Everything the screens read, from the sessions they already have. Nothing is
+ * persisted and nothing is cached: it is a few hundred points of arithmetic,
+ * and recomputing it is what lets a better estimator improve the whole history
+ * retroactively.
+ */
+export function strengthOf(list: DatedSession[], today: DayKey, windowDays: number): Strength {
+  const points = e1rmPoints(list);
+  const from = addDays(today, -windowDays);
+  // Bounded at both ends. Nothing later than `today` normally exists — the
+  // caller loads history up to the day on screen — but a window is a window,
+  // and one open at the top would quietly answer about a different stretch than
+  // the one it names.
+  const recent = points.filter((p) => p.day >= from && p.day <= today);
+
+  const groups = new Map<string, LiftPoint[]>();
+  for (const p of recent) groups.set(p.key, [...(groups.get(p.key) ?? []), p]);
+
+  const byExercise: { name: string; fit: Fit }[] = [];
+  for (const g of groups.values()) {
+    const fit = panelFit(g, windowDays);
+    // The newest spelling, matching how the autocomplete picks a display name.
+    if (fit) byExercise.push({ name: g[g.length - 1]!.name, fit });
+  }
+  byExercise.sort((a, b) => b.fit.perDay - a.fit.perDay);
+
+  return { index: strengthIndex(points), fit: panelFit(recent, windowDays), byExercise };
+}
+
+/**
+ * The fitted rate laid over the index points it covers, for drawing. Aligned to
+ * `index` with nulls outside the window, which is the shape the chart wants.
+ *
+ * The fit's own intercepts are per exercise and say nothing about where the
+ * index sits, so the height is chosen by least squares against the points the
+ * line crosses. The two will not agree at the endpoints — the fit uses every
+ * session in between and the index only chains — and that gap is the same one
+ * the weight chart already has between its trend line and any two weigh-ins.
+ */
+export function fitLine(index: IndexPoint[], fit: Fit, today: DayKey): (number | null)[] {
+  const from = addDays(today, -fit.windowDays);
+  const covers = (p: IndexPoint) => p.day >= from && p.day <= today;
+  const inside = index.filter(covers);
+  if (inside.length < 2) return index.map(() => null);
+
+  const origin = inside[0]!.day;
+  const at = (p: IndexPoint) => fit.perDay * daysBetween(origin, p.day);
+  const level = inside.reduce((a, p) => a + p.x - at(p), 0) / inside.length;
+  return index.map((p) => (covers(p) ? level + at(p) : null));
 }

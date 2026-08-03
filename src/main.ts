@@ -15,12 +15,17 @@ import {
   exerciseKey,
   exerciseNames,
   finish,
+  fitLine,
+  fitTotal,
   lastSessionNamed,
   newDraft,
   sessionsOf,
+  strengthOf,
   summarise,
   templateNames,
+  withinNoise,
   type DatedSession,
+  type Strength,
 } from "./lifts.js";
 import { estimateFood } from "./llm.js";
 import { requestReminders, updatePlan } from "./notify.js";
@@ -139,6 +144,10 @@ const SCREENS = ["today", "lifts", "lift", "trend", "settings"] as const;
 /** Latest estimate, kept so the chart can be drawn when Trend becomes visible. */
 let latest: Estimate | null = null;
 
+/** The same, for the strength index: both charts on Trend are drawn from what
+ *  the last render worked out, whenever the screen is next on show. */
+let latestStrength: Strength | null = null;
+
 /**
  * uPlot is by far the largest thing the app loads and Today never shows it, so
  * it is fetched the first time Trend is actually looked at rather than being
@@ -151,8 +160,12 @@ let chartModule: Promise<typeof import("./chart.js")> | null = null;
  * two paints racing across the dynamic import settle on the same picture.
  */
 async function paintChart(): Promise<void> {
-  const { drawTrend } = await (chartModule ??= import("./chart.js"));
+  const { drawStrength, drawTrend } = await (chartModule ??= import("./chart.js"));
   drawTrend($("chart"), latest?.samples ?? [], latest?.trendLine ?? []);
+
+  const s = latestStrength;
+  const index = s?.index ?? [];
+  drawStrength($("strength-chart"), index, s?.fit ? fitLine(index, s.fit, day) : index.map(() => null));
 }
 
 function show(name: Screen): void {
@@ -170,7 +183,9 @@ function show(name: Screen): void {
   }
   // uPlot sizes from the container, which measures zero while hidden, so the
   // chart can only be built once its section is on screen.
-  if (name === "trend" && latest) void paintChart();
+  // Unconditional: the two charts are independent, and a log with sessions but
+  // no weigh-ins still has a strength index to draw.
+  if (name === "trend") void paintChart();
   if (name === "lifts") void renderLifts();
 }
 
@@ -360,13 +375,97 @@ async function render(src: Source = "server"): Promise<void> {
   void planReminders(cfg, d, src);
   if (!cfg) return;
 
-  const est = estimate(cfg, await history!, day);
+  const past = await history!;
+  const est = estimate(cfg, past, day);
+
+  // Read over the same history and dated to the same day as the weight chart
+  // beside it, so browsing back moves both pictures together rather than one.
+  latestStrength = strengthOf(sessionsOf(past), day, cfg.strength.windowDays);
+  renderStrength(latestStrength);
+
   // Only ever pinned from a server read. The cache pass exists to put something
   // on screen fast, and a number derived from a stale month is not one to write
   // down permanently as what today was judged against.
   if (est && src === "server") await recordGoal(d, est);
   renderGoals(d, est);
   renderWeek(await week, est);
+}
+
+// ---------------------------------------------------------------- strength
+//
+// The verdict is the panel fit and its two-sigma interval; the chart is the
+// chained index. They do not agree at the endpoints, because the fit uses every
+// session in the window and the index only chains — the same relationship the
+// weight chart has between its trend line and any two weigh-ins.
+
+/** "6 weeks" where the window divides evenly, which is how it is picked, and
+ *  the honest "42 days" where someone has set it to something else. */
+const windowWords = (days: number): string =>
+  days % WEEK_DAYS ? `${days} days` : `${days / WEEK_DAYS} week${days === WEEK_DAYS ? "" : "s"}`;
+
+/** A proportion as a signed percentage: 0.45 reads "+45%". */
+const pct = (p: number): string => `${p < 0 ? "−" : "+"}${Math.round(Math.abs(p) * 100)}%`;
+
+/**
+ * The headline. When the interval covers zero the app declines to name a
+ * direction — a number that cannot be told from flat is not a finding, and
+ * reporting it as one is the failure this whole design is arranged against.
+ * That silence is correct rather than broken: at an ordinary rate of progress
+ * it takes eight or twelve weeks of window before there is anything to say.
+ */
+function renderStrength(s: Strength | null): void {
+  const note = $("strength-note");
+  const from = $("strength-from");
+  const fit = s?.fit ?? null;
+
+  if (!fit) {
+    note.textContent =
+      s && s.index.length
+        ? "Not enough logged yet to fit a trend — an exercise has to be repeated to say anything."
+        : "No sessions logged yet. The index is built from your best set of each exercise.";
+    from.textContent = "";
+    return;
+  }
+
+  const over = `over the last ${windowWords(fit.windowDays)}`;
+  note.textContent = withinNoise(fit)
+    ? `No clear change ${over}.`
+    : `Strength ${pct(fitTotal(fit))} ${over}` +
+      ` (${pct(fitTotal(fit, -2))} to ${pct(fitTotal(fit, 2))})`;
+
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  from.textContent =
+    `from ${plural(fit.points, "exercise-session")} across ${plural(fit.exercises, "exercise")}` +
+    ` · 100 on the chart is where the index starts, not a level`;
+}
+
+/**
+ * The same fit one exercise at a time, where it degenerates to plain OLS on that
+ * one series. Lives on Lifts because this is where the exercises are, and it is
+ * the decomposition of the Trend headline rather than a second opinion on it.
+ */
+function renderProgress(s: Strength): void {
+  const dl = $("progress");
+  const label = $("progress-note");
+  dl.replaceChildren();
+
+  label.hidden = s.byExercise.length === 0;
+  const first = s.byExercise[0];
+  if (!first) return;
+  label.textContent = `Per exercise, last ${windowWords(first.fit.windowDays)}`;
+
+  for (const { name, fit } of s.byExercise) {
+    const row = document.createElement("div");
+    const dt = document.createElement("dt");
+    dt.textContent = name;
+    const dd = document.createElement("dd");
+    dd.textContent = pct(fitTotal(fit));
+    // Shown, because it was trained, but dimmed: on one exercise the interval
+    // is wide, and most of these are numbers rather than findings.
+    if (withinNoise(fit)) dd.className = "quiet";
+    row.append(dt, dd);
+    dl.append(row);
+  }
 }
 
 /**
@@ -591,6 +690,12 @@ function editDraft(fn: (d: Draft) => void): void {
 async function renderLifts(): Promise<void> {
   await loadSessions();
   draft ??= readDraft();
+
+  // Always about today, unlike Trend, which follows whichever day is on screen.
+  // This screen has no day scroller precisely because training is an event
+  // stream rather than a daily obligation, so there is no other day to mean.
+  const window = (cachedConfig() ?? defaultConfig()).strength.windowDays;
+  renderProgress(strengthOf(sessions, todayKey(), window));
 
   const names = templateNames(sessions);
   const chips = $("templates");

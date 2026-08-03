@@ -209,14 +209,16 @@ h3 span {
 #stats { margin: 1.25rem 0; }
 
 /* uPlot draws axes and grid from JS options (see chart.ts theme()); these rules
-   cover the parts it renders as DOM. touch-action is what lets drag pan the
-   chart instead of scrolling the page. */
+   cover the parts it renders as DOM. Everything else here is .chart, shared by
+   both charts on Trend — but only the weight one pans, and touch-action is what
+   trades a finger drag over it for scrolling the page. Over the strength chart
+   there is nothing to drag, so the page must keep the gesture. */
 #chart .u-over { touch-action: none; cursor: grab; }
 #chart .u-over:active { cursor: grabbing; }
 
 /* uPlot sizes its root to min-content, which lets the legend widen the whole
    chart. Pinning it to the container keeps both to the same width. */
-#chart .uplot { width: 100%; }
+.chart .uplot { width: 100%; }
 
 /* Live legend doubles as the hover readout: date and both values at the cursor.
    uPlot hardcodes its inline legend class for single-value legends, which lays
@@ -224,7 +226,7 @@ h3 span {
    along, and on a narrow screen the last one wrapped. Undoing the inline
    display puts each series on its own line, and a fixed table layout then pins
    the value column so nothing moves as the cursor sweeps. */
-#chart .u-legend {
+.chart .u-legend {
   display: table;
   table-layout: fixed;
   width: 100%;
@@ -232,14 +234,14 @@ h3 span {
   font-size: .8rem;
   text-align: left;
 }
-#chart .u-legend tbody { display: table-row-group; }
-#chart .u-legend tr { display: table-row; margin-right: 0; }
-#chart .u-legend td { display: table-cell; }
+.chart .u-legend tbody { display: table-row-group; }
+.chart .u-legend tr { display: table-row; margin-right: 0; }
+.chart .u-legend td { display: table-cell; }
 /* Just wide enough for "weighed", the longest label, at .8rem. The value column
    takes whatever is left, which on the narrowest phone is still ample for
    "Fri, 10 Jul". Ellipsis rather than nowrap alone, so a wider system font
    degrades to a clipped label instead of pushing the value off the row. */
-#chart .u-legend th {
+.chart .u-legend th {
   display: table-cell;
   width: 4rem;
   white-space: nowrap;
@@ -247,11 +249,11 @@ h3 span {
   text-overflow: ellipsis;
 }
 /* Values keep their own row even if one runs long. */
-#chart .u-legend .u-value { white-space: nowrap; }
-#chart .u-legend .u-series > * { padding: .1rem .5rem .1rem 0; }
-#chart .u-legend .u-series th { color: var(--dim); font-weight: 400; }
-#chart .u-legend .u-value { color: var(--fg); font-variant-numeric: tabular-nums; }
-#chart .u-legend .u-series:first-child th { color: var(--fg); }
+.chart .u-legend .u-value { white-space: nowrap; }
+.chart .u-legend .u-series > * { padding: .1rem .5rem .1rem 0; }
+.chart .u-legend .u-series th { color: var(--dim); font-weight: 400; }
+.chart .u-legend .u-value { color: var(--fg); font-variant-numeric: tabular-nums; }
+.chart .u-legend .u-series:first-child th { color: var(--fg); }
 
 #trend-note { margin: .75rem 0 .25rem; }
 
@@ -266,9 +268,32 @@ h3 span {
 }
 #week dt { flex: 0 0 5.5rem; color: var(--dim); font-size: .85rem; }
 #week dd { flex: 1; margin: 0; font-variant-numeric: tabular-nums; }
-#chart .pts circle { fill: var(--dim); }
-#chart .ewma { fill: none; stroke: var(--ok); stroke-width: 1.5; }
-#chart text { fill: var(--dim); font-size: 8px; }
+
+/* The strength decomposition, on Lifts. The same two-column row as #week and
+   the session list, with the columns the other way round: here the label is the
+   long, variable half and the number is the fixed one, so the numbers line up
+   down the right where they can be compared at a glance. */
+#progress { margin: 0 0 1rem; }
+#progress div {
+  display: flex;
+  gap: .5rem;
+  align-items: baseline;
+  padding: .4rem 0;
+  border-bottom: 1px solid var(--line);
+}
+#progress dt { flex: 1; overflow-wrap: anywhere; }
+#progress dd {
+  flex: 0 0 auto;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* An exercise whose own interval covers zero still belongs on the list — it was
+   trained — but its number is not a finding, and reads as one at full contrast. */
+#progress .quiet { color: var(--dim); }
+.chart .pts circle { fill: var(--dim); }
+.chart .ewma { fill: none; stroke: var(--ok); stroke-width: 1.5; }
+.chart text { fill: var(--dim); font-size: 8px; }
 
 ul { list-style: none; padding: 0; margin: 1rem 0; }
 li {

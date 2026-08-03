@@ -8,6 +8,7 @@
 import uPlot from "../vendor/uPlot.esm.js";
 import { parseDay } from "./dates.js";
 import type { Sample } from "./estimate.js";
+import type { IndexPoint } from "./lifts.js";
 
 const DAY_SECONDS = 86_400;
 
@@ -28,7 +29,7 @@ const HEIGHT = 280;
 const DEFAULT_SPAN_DAYS = 21;
 
 /** Local midnight as unix seconds — uPlot's native x unit. */
-const toX = (s: Sample) => parseDay(s.day).getTime() / 1000;
+const toX = (s: { day: string }) => parseDay(s.day).getTime() / 1000;
 
 let plot: uPlot | null = null;
 /** Full data extent, so pan/zoom can be clamped to it. */
@@ -236,5 +237,110 @@ export function drawTrend(el: HTMLElement, samples: Sample[], ewma: Sample[]): v
   new ResizeObserver(() => {
     const w = el.clientWidth;
     if (plot && w) plot.setSize({ width: w, height: HEIGHT });
+  }).observe(el);
+}
+
+// ------------------------------------------------------------ the strength index
+//
+// Its own chart, below the weight one and not merged with it: the two share an
+// x axis and nothing else, and a second y axis on one picture would invite
+// exactly the point-to-point reading both are built to avoid.
+
+/** Shared with the weight chart above; only the series differ. */
+function strengthOptions(width: number): uPlot.Options {
+  const c = theme();
+  const axis = {
+    stroke: c.dim,
+    grid: { stroke: c.line, width: 1 },
+    ticks: { stroke: c.line, width: 1 },
+    font: "11px system-ui, sans-serif",
+  };
+
+  return {
+    width,
+    height: HEIGHT,
+    padding: [8, 8, 0, 0],
+    cursor: { drag: { x: false, y: false }, points: { size: 7 } },
+    legend: { show: true, live: true, markers: { show: false } },
+    scales: { x: { time: true } },
+    axes: [
+      { ...axis },
+      { ...axis, size: 44, values: (_u, vals) => vals.map((v) => v.toFixed(0)) },
+    ],
+    series: [
+      {
+        label: "date",
+        value: (_u, v) =>
+          v == null
+            ? "—"
+            : new Date(v * 1000).toLocaleDateString(undefined, {
+                weekday: "short",
+                day: "numeric",
+                month: "short",
+              }),
+      },
+      {
+        // A line, unlike the weigh-ins above: consecutive index points are not
+        // independent samples of one quantity, they are a running total, and
+        // the segment between two of them is a real thing that happened.
+        label: "index",
+        stroke: c.fg,
+        width: 2,
+        points: { show: true, size: 3.5, stroke: c.fg, fill: c.fg },
+        value: (_u, v) => (v == null ? "—" : v.toFixed(1)),
+      },
+      {
+        label: "fitted",
+        stroke: c.ok,
+        width: 2,
+        points: { show: false },
+        value: (_u, v) => (v == null ? "—" : v.toFixed(1)),
+      },
+    ],
+  };
+}
+
+let strengthPlot: uPlot | null = null;
+
+/**
+ * The index, rebased so its left edge reads 100.
+ *
+ * No pan or zoom, deliberately, and the one place the two charts differ. The
+ * index has no absolute level — it is defined only up to an additive constant —
+ * so the number on the axis only means anything relative to the left edge of
+ * the picture. Panning would slide that baseline out from under the reader
+ * while the numbers stayed put, which is worse than not panning at all.
+ */
+export function drawStrength(el: HTMLElement, index: IndexPoint[], fitted: (number | null)[]): void {
+  if (index.length < 2) {
+    strengthPlot?.destroy();
+    strengthPlot = null;
+    el.replaceChildren();
+    return;
+  }
+
+  const base = index[0]!.x;
+  const rebase = (x: number | null) => (x == null ? null : 100 * Math.exp(x - base));
+  const data: uPlot.AlignedData = [
+    index.map(toX),
+    index.map((p) => rebase(p.x)!),
+    fitted.map(rebase),
+  ];
+
+  const width = el.clientWidth;
+  if (!width) return; // container still hidden; caller redraws on show
+
+  if (strengthPlot) {
+    strengthPlot.setData(data);
+    strengthPlot.setSize({ width, height: HEIGHT });
+    return;
+  }
+
+  el.replaceChildren();
+  strengthPlot = new uPlot(strengthOptions(width), data, el);
+
+  new ResizeObserver(() => {
+    const w = el.clientWidth;
+    if (strengthPlot && w) strengthPlot.setSize({ width: w, height: HEIGHT });
   }).observe(el);
 }
