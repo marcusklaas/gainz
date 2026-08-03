@@ -246,16 +246,32 @@ h3 span {
   min-width: 0;
   margin: 0;
 }
+/* The numeric pairs hold their size unconditionally. Left shrinkable they would
+   be squeezed along with the date on a narrow screen, which is the one thing
+   the fixed widths below exist to prevent. */
+.chart .u-legend tr:not(:first-child) { flex: none; }
 .chart .u-legend th,
 .chart .u-legend td { display: block; padding: 0; }
-.chart .u-legend th { color: var(--dim); font-weight: 400; }
+/* Labels never give up room — they are the fixed half of every pair, and the
+   only thing worth squeezing is the date value below. */
+.chart .u-legend th { flex: none; color: var(--dim); font-weight: 400; }
 .chart .u-legend .u-value { color: var(--fg); font-variant-numeric: tabular-nums; }
 
-/* The date is the one slot with no fixed width, because it is also the one that
-   can be given up: on a narrow phone it takes what is left and clips, so the
-   numbers — which are the reason to hover at all — keep their places. */
+/* The date gets a fixed width like everything else — "Wed, 10 Jul" is the
+   widest it reads and "Fri, 1 Aug" the narrowest, which is a whole character of
+   swing on the one cell that changes on every single point.
+
+   It is still the slot that gives way when the row will not fit, but it gives
+   way by shrinking against the container rather than against its own text, so
+   the width is decided by the screen and never by which day is under the
+   cursor. Ellipsis rather than a wrap, since a second line would move the
+   numbers rather than just clip a weekday. */
 .chart .u-legend tr:first-child { flex: 0 1 auto; overflow: hidden; }
-.chart .u-legend tr:first-child .u-value { overflow: hidden; text-overflow: ellipsis; }
+.chart .u-legend tr:first-child .u-value {
+  width: 11ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* "70.05 kg", the longest the trend can read at a plausible bodyweight. */
 #chart .u-legend tr:not(:first-child) .u-value { width: 8.5ch; }
