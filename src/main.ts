@@ -15,7 +15,6 @@ import {
   exerciseKey,
   exerciseNames,
   finish,
-  fitLine,
   fitTotal,
   lastSessionNamed,
   newDraft,
@@ -162,10 +161,7 @@ let chartModule: Promise<typeof import("./chart.js")> | null = null;
 async function paintChart(): Promise<void> {
   const { drawStrength, drawTrend } = await (chartModule ??= import("./chart.js"));
   drawTrend($("chart"), latest?.samples ?? [], latest?.trendLine ?? []);
-
-  const s = latestStrength;
-  const index = s?.index ?? [];
-  drawStrength($("strength-chart"), index, s?.fit ? fitLine(index, s.fit, day) : index.map(() => null));
+  drawStrength($("strength-chart"), latestStrength?.index ?? []);
 }
 
 function show(name: Screen): void {
@@ -440,35 +436,6 @@ function renderStrength(s: Strength | null): void {
 }
 
 /**
- * The same fit one exercise at a time, where it degenerates to plain OLS on that
- * one series. Lives on Lifts because this is where the exercises are, and it is
- * the decomposition of the Trend headline rather than a second opinion on it.
- */
-function renderProgress(s: Strength): void {
-  const dl = $("progress");
-  const label = $("progress-note");
-  dl.replaceChildren();
-
-  label.hidden = s.byExercise.length === 0;
-  const first = s.byExercise[0];
-  if (!first) return;
-  label.textContent = `Per exercise, last ${windowWords(first.fit.windowDays)}`;
-
-  for (const { name, fit } of s.byExercise) {
-    const row = document.createElement("div");
-    const dt = document.createElement("dt");
-    dt.textContent = name;
-    const dd = document.createElement("dd");
-    dd.textContent = pct(fitTotal(fit));
-    // Shown, because it was trained, but dimmed: on one exercise the interval
-    // is wide, and most of these are numbers rather than findings.
-    if (withinNoise(fit)) dd.className = "quiet";
-    row.append(dt, dd);
-    dl.append(row);
-  }
-}
-
-/**
  * The week as it happened. Every line survives a missing estimate except
  * protein, whose target needs a weight to exist — so the block is never hidden,
  * and on a fresh install it still reports what has been logged and trained.
@@ -690,12 +657,6 @@ function editDraft(fn: (d: Draft) => void): void {
 async function renderLifts(): Promise<void> {
   await loadSessions();
   draft ??= readDraft();
-
-  // Always about today, unlike Trend, which follows whichever day is on screen.
-  // This screen has no day scroller precisely because training is an event
-  // stream rather than a daily obligation, so there is no other day to mean.
-  const window = (cachedConfig() ?? defaultConfig()).strength.windowDays;
-  renderProgress(strengthOf(sessions, todayKey(), window));
 
   const names = templateNames(sessions);
   const chips = $("templates");

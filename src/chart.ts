@@ -289,13 +289,6 @@ function strengthOptions(width: number): uPlot.Options {
         points: { show: true, size: 3.5, stroke: c.fg, fill: c.fg },
         value: (_u, v) => (v == null ? "—" : v.toFixed(1)),
       },
-      {
-        label: "fitted",
-        stroke: c.ok,
-        width: 2,
-        points: { show: false },
-        value: (_u, v) => (v == null ? "—" : v.toFixed(1)),
-      },
     ],
   };
 }
@@ -310,8 +303,15 @@ let strengthPlot: uPlot | null = null;
  * so the number on the axis only means anything relative to the left edge of
  * the picture. Panning would slide that baseline out from under the reader
  * while the numbers stayed put, which is worse than not panning at all.
+ *
+ * The index alone, with no fitted line over it. The line was drawn once and
+ * looked at: over six weeks the fit reads +44% where the index's own endpoints
+ * read +58%, because the fit uses every session in the window and the index
+ * only chains. That gap is honest and is not small, and eleven points of
+ * daylight between a line and the points it is drawn through reads as a bug
+ * rather than as information. The headline carries the fit in words instead.
  */
-export function drawStrength(el: HTMLElement, index: IndexPoint[], fitted: (number | null)[]): void {
+export function drawStrength(el: HTMLElement, index: IndexPoint[]): void {
   if (index.length < 2) {
     strengthPlot?.destroy();
     strengthPlot = null;
@@ -320,11 +320,9 @@ export function drawStrength(el: HTMLElement, index: IndexPoint[], fitted: (numb
   }
 
   const base = index[0]!.x;
-  const rebase = (x: number | null) => (x == null ? null : 100 * Math.exp(x - base));
   const data: uPlot.AlignedData = [
     index.map(toX),
-    index.map((p) => rebase(p.x)!),
-    fitted.map(rebase),
+    index.map((p) => 100 * Math.exp(p.x - base)),
   ];
 
   const width = el.clientWidth;

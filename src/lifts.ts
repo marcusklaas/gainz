@@ -383,8 +383,6 @@ export interface Strength {
   index: IndexPoint[];
   /** The verdict over the last `windowDays`. Null until there is enough. */
   fit: Fit | null;
-  /** The same fit one exercise at a time, biggest gain first. */
-  byExercise: { name: string; fit: Fit }[];
 }
 
 /**
@@ -392,6 +390,12 @@ export interface Strength {
  * persisted and nothing is cached: it is a few hundred points of arithmetic,
  * and recomputing it is what lets a better estimator improve the whole history
  * retroactively.
+ *
+ * The whole basket, every time. Which exercises belong in the index is a
+ * question worth asking — `panelFit` restricted to any subset of the points is
+ * the same fit, and restricted to one exercise it degenerates to plain OLS on
+ * that series — but it is a question for the screen to ask, not for this to
+ * answer by picking for you.
  */
 export function strengthOf(list: DatedSession[], today: DayKey, windowDays: number): Strength {
   const points = e1rmPoints(list);
@@ -402,38 +406,5 @@ export function strengthOf(list: DatedSession[], today: DayKey, windowDays: numb
   // the one it names.
   const recent = points.filter((p) => p.day >= from && p.day <= today);
 
-  const groups = new Map<string, LiftPoint[]>();
-  for (const p of recent) groups.set(p.key, [...(groups.get(p.key) ?? []), p]);
-
-  const byExercise: { name: string; fit: Fit }[] = [];
-  for (const g of groups.values()) {
-    const fit = panelFit(g, windowDays);
-    // The newest spelling, matching how the autocomplete picks a display name.
-    if (fit) byExercise.push({ name: g[g.length - 1]!.name, fit });
-  }
-  byExercise.sort((a, b) => b.fit.perDay - a.fit.perDay);
-
-  return { index: strengthIndex(points), fit: panelFit(recent, windowDays), byExercise };
-}
-
-/**
- * The fitted rate laid over the index points it covers, for drawing. Aligned to
- * `index` with nulls outside the window, which is the shape the chart wants.
- *
- * The fit's own intercepts are per exercise and say nothing about where the
- * index sits, so the height is chosen by least squares against the points the
- * line crosses. The two will not agree at the endpoints — the fit uses every
- * session in between and the index only chains — and that gap is the same one
- * the weight chart already has between its trend line and any two weigh-ins.
- */
-export function fitLine(index: IndexPoint[], fit: Fit, today: DayKey): (number | null)[] {
-  const from = addDays(today, -fit.windowDays);
-  const covers = (p: IndexPoint) => p.day >= from && p.day <= today;
-  const inside = index.filter(covers);
-  if (inside.length < 2) return index.map(() => null);
-
-  const origin = inside[0]!.day;
-  const at = (p: IndexPoint) => fit.perDay * daysBetween(origin, p.day);
-  const level = inside.reduce((a, p) => a + p.x - at(p), 0) / inside.length;
-  return index.map((p) => (covers(p) ? level + at(p) : null));
+  return { index: strengthIndex(points), fit: panelFit(recent, windowDays) };
 }

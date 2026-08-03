@@ -114,13 +114,6 @@
     </div>
     <button id="lift-resume" hidden></button>
 
-    <!-- The decomposition of the Trend headline, which belongs here because
-         this is where the exercises are. Above the log rather than below it, so
-         the screen reads: start a session, how it is going, what you have done.
-         Hidden until there is enough of each series to fit. -->
-    <p id="progress-note" class="note" hidden></p>
-    <dl id="progress"></dl>
-
     <ul id="sessions"></ul>
     <p id="lifts-msg" class="msg"></p>
     <p id="lifts-note" class="note"></p>
@@ -166,9 +159,10 @@
     <p class="note">Drag to pan · wheel or pinch to zoom · double-click to reset</p>
 
     <!-- Its own chart and its own headline, below the weight one and not merged
-         with it. The verdict is the panel fit; the chart is the chained index,
-         which is the picture of the same thing and does not agree with it at
-         the endpoints — see the note in STRENGTH.md. -->
+         with it. The verdict below is the panel fit; the chart is the chained
+         index, which is the picture of the same thing and does not agree with
+         it at the endpoints. Drawing the fitted line over the points was tried
+         and dropped — see drawStrength. -->
     <h2>Strength</h2>
     <div id="strength-chart" class="chart"></div>
     <p id="strength-note"></p>
