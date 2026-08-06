@@ -133,6 +133,25 @@ export const confirmedSets = (d: Draft): number =>
   d.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done).length, 0);
 
 /**
+ * The list with one item moved. Order here is the array and nothing else — there
+ * is no position field to keep in step, and no id to renumber — so this is the
+ * whole of what reordering a session is.
+ *
+ * Generic because it has no business knowing what it is moving, and returning
+ * rather than splicing in place because that is what everything else in this
+ * file does. Out-of-range indices return the list untouched, so the ends of a
+ * list are the caller's problem only when it wants to say so in the UI.
+ */
+export function moved<T>(list: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return list;
+  const out = [...list];
+  const [item] = out.splice(from, 1);
+  if (item === undefined) return list;
+  out.splice(to, 0, item);
+  return out;
+}
+
+/**
  * The draft as it will be stored: unconfirmed sets dropped, exercises left with
  * none dropped with them, the flag stripped. A set you did not do is one you
  * never confirmed — there is no separate way to say so, and no way to record a

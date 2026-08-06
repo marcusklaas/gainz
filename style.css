@@ -404,7 +404,19 @@ li button { border: 0; background: none; padding: 0 .25rem; }
 .set.ghost input { color: var(--dim); border-style: dashed; }
 .set.ghost button { color: var(--ok); border-color: var(--ok); }
 
-.add-set { width: 100%; color: var(--dim); border-style: dashed; }
+/* Adding a set and moving the exercise are both things done to the exercise as a
+   whole, so they share the row this already was rather than the h3, which holds
+   the name and the one control that destroys it. The arrows take the same 2.5rem
+   box as the set buttons above, which keeps every rightmost control on the screen
+   in the one column; `+ set` stays dashed, because of the three it is the only
+   one that adds anything. */
+.ex-foot { display: flex; gap: .3rem; }
+.add-set { flex: 1; color: var(--dim); border-style: dashed; }
+.ex-foot .move { flex: 0 0 2.5rem; }
+/* Down to the next dimmest token rather than a new opacity, the way the disabled
+   Save already goes. An arrow at the end of the list is still worth its space:
+   the pair reads as one control, and dropping one would shift the other. */
+.ex-foot .move:disabled { color: var(--line); border-color: var(--line); cursor: default; }
 
 #l-add-form { display: flex; gap: .4rem; }
 #l-add-form input { flex: 1; min-width: 0; }
