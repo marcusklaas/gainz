@@ -1,0 +1,18 @@
+{
+  // The test build. Separate from tsconfig.json because the two have different
+  // roots and different outputs: js/ is what gets deployed and must contain
+  // nothing but the app, so tests cannot compile into it.
+  //
+  // Only `test` is included. tsc follows the imports from there, so the
+  // estimator modules get compiled as a side effect and nothing else does —
+  // the DOM-facing half of src/ is type-checked by `npm run build`, which is
+  // the job that actually has to produce it.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "test-build",
+    "types": ["node"],
+    "sourceMap": false
+  },
+  "include": ["test"]
+}

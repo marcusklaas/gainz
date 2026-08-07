@@ -15,6 +15,13 @@
     "moduleResolution": "bundler",
     "esModuleInterop": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // No ambient @types at all. This runs in a browser, and @types/node — a dev
+    // dependency of the tests, not of the app — is otherwise picked up from
+    // node_modules automatically and globally. It redeclares the timer
+    // functions as returning `Timeout` rather than the DOM's `number`, so
+    // installing it silently broke the build of files that never imported it.
+    // The tests re-enable it for themselves in tsconfig.test.json.
+    "types": [],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,

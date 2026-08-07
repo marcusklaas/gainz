@@ -19,7 +19,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The same job a pull request runs, called rather than copied so the two can
+  # never drift apart. A red build or a failing test stops the deploy below.
+  checks:
+    uses: ./.github/workflows/checks.yml
+
   deploy:
+    needs: checks
     runs-on: ubuntu-latest
     environment:
       name: github-pages

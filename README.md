@@ -15,7 +15,15 @@ TypeScript, no framework, no bundler. The only dependency is
 ```
 npm install
 npm run build     # tsc: src/ -> js/
+npm run test      # node:test over the estimators
 npm run serve     # http://localhost:8080
 ```
 
-Pushing to `main` builds and publishes via `.github/workflows/pages.yml`.
+Tests cover the pure half of the app — `dates`, `estimate` and `lifts`, which is
+where all the arithmetic lives. They compile through `tsconfig.test.json` into
+`test-build/` and run on Node's built-in runner, so there is no test framework
+to install.
+
+`.github/workflows/checks.yml` runs the build and the tests on every pull
+request, and pushing to `main` runs the same job before publishing via
+`.github/workflows/pages.yml`.
