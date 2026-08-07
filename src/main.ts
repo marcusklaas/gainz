@@ -647,42 +647,6 @@ let edit: Draft | null = null;
 /** Whichever of the two the editor is showing. */
 const current = (): Draft | null => edit ?? draft;
 
-/**
- * The arrow to put the keyboard back on once the grid has been rebuilt. Held
- * here rather than passed to `renderEditor`, which is called from a dozen places
- * that have no opinion about focus.
- *
- * Rebuilding the whole grid on every change is what keeps the rest of this
- * screen simple, and this is the one thing it costs: the button just pressed no
- * longer exists, so focus has to follow the exercise to its new slot rather than
- * an element to nowhere.
- */
-let refocus: { index: number; dir: -1 | 1 } | null = null;
-
-/**
- * Runs `fn`, then scrolls so the exercise that moves from `from` to `to` sits
- * where the eye left it.
- *
- * An exercise with four sets is most of a thumb's reach tall, so moving one past
- * its neighbour would otherwise slide the *next* exercise's arrows under the
- * finger between two taps of what is meant to be one move. Holding the block
- * still is what makes the second tap land on the same exercise as the first, and
- * it turns an animation-shaped problem into a scroll.
- *
- * Both indices are needed because the rebuild is what carries the block across:
- * beforehand it is the block at `from`, afterwards the one at `to`, and there is
- * no element in common to measure twice.
- */
-function anchored(from: number, to: number, fn: () => void): void {
-  const list = $("l-exercises");
-  const top = (i: number) =>
-    (list.children[i] as HTMLElement | undefined)?.getBoundingClientRect().top;
-  const before = top(from);
-  fn();
-  const after = top(to);
-  if (before !== undefined && after !== undefined) window.scrollBy(0, after - before);
-}
-
 function editDraft(fn: (d: Draft) => void): void {
   const d = current();
   if (!d) return;
@@ -905,27 +869,24 @@ function renderEditor(): void {
     foot.className = "ex-foot";
     foot.append(add);
 
-    // One exercise has no order, so there is nothing to disable — the row simply
-    // does not have the arrows, and `+ set` takes back the full width.
-    if (d.exercises.length > 1) {
-      for (const dir of [-1, 1] as const) {
-        const to = ei + dir;
-        const move = document.createElement("button");
-        move.className = "move";
-        move.textContent = dir < 0 ? "↑" : "↓";
-        move.title = dir < 0 ? "Move up" : "Move down";
-        move.setAttribute("aria-label", `Move ${ex.name} ${dir < 0 ? "up" : "down"}`);
-        move.disabled = to < 0 || to >= d.exercises.length;
-        move.addEventListener("click", () => {
-          refocus = { index: to, dir };
-          anchored(ei, to, () =>
-            editDraft((x) => {
-              x.exercises = moved(x.exercises, ei, to);
-            }),
-          );
-        });
-        foot.append(move);
-      }
+    // An arrow with nowhere to go is not drawn at all, which is also the whole of
+    // why a single exercise needs no saying: it is both the first and the last, so
+    // both directions fall out and `+ set` takes back the full width.
+    for (const dir of [-1, 1] as const) {
+      const to = ei + dir;
+      if (to < 0 || to >= d.exercises.length) continue;
+
+      const move = document.createElement("button");
+      move.className = "move";
+      move.textContent = dir < 0 ? "↑" : "↓";
+      move.title = dir < 0 ? "Move up" : "Move down";
+      move.setAttribute("aria-label", `Move ${ex.name} ${dir < 0 ? "up" : "down"}`);
+      move.addEventListener("click", () =>
+        editDraft((x) => {
+          x.exercises = moved(x.exercises, ei, to);
+        }),
+      );
+      foot.append(move);
     }
 
     block.append(foot);
@@ -942,18 +903,6 @@ function renderEditor(): void {
   }
 
   $<HTMLButtonElement>("l-save").disabled = confirmedSets(d) === 0;
-
-  // Put the keyboard back on the arrow it was on, now under the exercise rather
-  // than the slot. An exercise that has arrived at either end disables the arrow
-  // that took it there, so focus moves to the other one rather than being
-  // dropped on the very press that finishes the move.
-  if (refocus !== null) {
-    const foot = list.children[refocus.index]?.querySelector(".ex-foot");
-    const arrows = foot?.querySelectorAll<HTMLButtonElement>(".move");
-    const wanted = arrows?.[refocus.dir < 0 ? 0 : 1];
-    (wanted?.disabled ? arrows?.[refocus.dir < 0 ? 1 : 0] : wanted)?.focus();
-    refocus = null;
-  }
 }
 
 $("lift-resume").addEventListener("click", () => enter());
