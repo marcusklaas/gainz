@@ -1,8 +1,18 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "node",
+    // "bundler" rather than "nodenext", though there is no bundler and the
+    // output is loaded by the browser as plain modules. The two differ on what
+    // a declaration file is allowed to say: vendor/uPlot.esm.d.ts ends in
+    // `export = uPlot`, the CommonJS form, while the file it describes is an ES
+    // module with a default export. nodenext takes the declaration at its word
+    // and refuses the default import; bundler bridges it the way esModuleInterop
+    // always has. Patching the vendored declaration would be the alternative,
+    // and it would have to be re-patched every time uPlot is re-vendored.
+    //
+    // Replaces "node" (node10), which TypeScript 6 rejects outright and 7 drops.
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "esModuleInterop": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
