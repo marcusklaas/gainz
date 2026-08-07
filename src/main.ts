@@ -17,6 +17,7 @@ import {
   finish,
   fitTotal,
   lastSessionNamed,
+  moved,
   newDraft,
   sessionsOf,
   strengthOf,
@@ -858,7 +859,37 @@ function renderEditor(): void {
         sets.push({ weight_kg: last?.weight_kg ?? 0, reps: last?.reps ?? 0, done: true });
       }),
     );
-    block.append(add);
+
+    // The arrows share the row rather than taking one of their own, and share it
+    // with `+ set` rather than crowding the h3, because both are things done to
+    // the exercise as a whole — which is what this row already was. Sized to the
+    // same box as the set buttons, they also land in the one right-hand column
+    // every other control on this screen keeps to.
+    const foot = document.createElement("div");
+    foot.className = "ex-foot";
+    foot.append(add);
+
+    // An arrow with nowhere to go is not drawn at all, which is also the whole of
+    // why a single exercise needs no saying: it is both the first and the last, so
+    // both directions fall out and `+ set` takes back the full width.
+    for (const dir of [-1, 1] as const) {
+      const to = ei + dir;
+      if (to < 0 || to >= d.exercises.length) continue;
+
+      const move = document.createElement("button");
+      move.className = "move";
+      move.textContent = dir < 0 ? "↑" : "↓";
+      move.title = dir < 0 ? "Move up" : "Move down";
+      move.setAttribute("aria-label", `Move ${ex.name} ${dir < 0 ? "up" : "down"}`);
+      move.addEventListener("click", () =>
+        editDraft((x) => {
+          x.exercises = moved(x.exercises, ei, to);
+        }),
+      );
+      foot.append(move);
+    }
+
+    block.append(foot);
     list.append(block);
   });
 
