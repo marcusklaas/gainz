@@ -30,8 +30,19 @@ body {
   background: var(--bg);
 }
 
-h1, h2 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 .5rem; }
-h1 { margin-top: 0; }
+/* The 1.5rem is space *between* sections, not space above a heading: it is
+   asked for by the element in front of it, so a heading that opens a screen —
+   Trend's "Weight", Settings' first fold — sits at the top the way Today's day
+   row does, while two headings down the same screen keep the full gap. */
+h1, h2 { font-size: 1rem; font-weight: 600; margin: 0 0 .5rem; }
+* + :is(h1, h2) { margin-top: 1.5rem; }
+
+/* Same idea one level down, for the screens that open on something other than a
+   heading: Lifts leads with a paragraph, whose own margin would otherwise push
+   it off the top edge. Only the leading element is trimmed — everything after
+   it spaces itself normally. */
+main > section > :first-child,
+main > section > :first-child > :first-child { margin-top: 0; }
 
 /* A tab bar across the bottom, where a thumb already is. Fixed rather than
    sticky: the nav is the first thing in the document, and a sticky element

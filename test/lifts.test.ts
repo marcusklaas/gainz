@@ -22,7 +22,6 @@ import {
   strengthOf,
   summarise,
   templateNames,
-  withinNoise,
   type DatedSession,
   type LiftPoint,
 } from "../src/lifts.js";
@@ -552,7 +551,7 @@ describe("panelFit", () => {
   });
 });
 
-describe("fitTotal / withinNoise", () => {
+describe("fitTotal", () => {
   const fit = (perDay: number, stdErrPerDay: number) => ({
     perDay,
     stdErrPerDay,
@@ -573,13 +572,6 @@ describe("fitTotal / withinNoise", () => {
     assert.ok(lo < fitTotal(f) && fitTotal(f) < hi);
     close(Math.log(1 + lo), (0.002 - 0.001) * 42, 1e-12);
     close(Math.log(1 + hi), (0.002 + 0.001) * 42, 1e-12);
-  });
-
-  it("calls a rate noise exactly when two sigmas cover zero", () => {
-    assert.equal(withinNoise(fit(0.001, 0.0006)), true); // interval spans zero
-    assert.equal(withinNoise(fit(0.002, 0.0006)), false); // clears it
-    assert.equal(withinNoise(fit(-0.002, 0.0006)), false); // losing strength is a verdict too
-    assert.equal(withinNoise(fit(0, 0.0001)), true);
   });
 });
 

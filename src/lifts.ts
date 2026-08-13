@@ -393,10 +393,6 @@ export function panelFit(all: LiftPoint[], windowDays: number): Fit | null {
 export const fitTotal = (f: Fit, sigmas = 0): number =>
   Math.exp((f.perDay + sigmas * f.stdErrPerDay) * f.windowDays) - 1;
 
-/** Whether two standard errors cover zero — in which case there is no verdict
- *  to give, and saying so is the whole of what the app should say. */
-export const withinNoise = (f: Fit): boolean => Math.abs(f.perDay) < 2 * f.stdErrPerDay;
-
 export interface Strength {
   /** The chained level, one point per training day, oldest first. */
   index: IndexPoint[];

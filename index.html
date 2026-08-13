@@ -133,6 +133,11 @@
 
     <div id="l-exercises"></div>
 
+    <!-- The list is every exercise in history, newest first, and the matching
+         is the browser's: <datalist> is the element for "this field has known
+         values but is not limited to them", which is exactly the case here, and
+         how well an engine filters it is that engine's business rather than
+         something to reimplement in a div. -->
     <form id="l-add-form">
       <input id="l-exercise" list="exercise-names" placeholder="Add an exercise" required
         autocomplete="off" autocapitalize="none">

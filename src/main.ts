@@ -23,8 +23,8 @@ import {
   strengthOf,
   summarise,
   templateNames,
-  withinNoise,
   type DatedSession,
+  type Fit,
   type Strength,
 } from "./lifts.js";
 import { estimateFood } from "./llm.js";
@@ -395,20 +395,22 @@ async function render(src: Source = "server"): Promise<void> {
 // session in the window and the index only chains — the same relationship the
 // weight chart has between its trend line and any two weigh-ins.
 
-/** "6 weeks" where the window divides evenly, which is how it is picked, and
- *  the honest "42 days" where someone has set it to something else. */
-const windowWords = (days: number): string =>
-  days % WEEK_DAYS ? `${days} days` : `${days / WEEK_DAYS} week${days === WEEK_DAYS ? "" : "s"}`;
+/** A proportion as a percentage with the direction as an arrow: 0.45 reads
+ *  "↑45%", matching how the weight trend states its rate. */
+const pct = (p: number): string => `${p < 0 ? "↓" : "↑"}${Math.round(Math.abs(p) * 100)}%`;
 
-/** A proportion as a signed percentage: 0.45 reads "+45%". */
-const pct = (p: number): string => `${p < 0 ? "−" : "+"}${Math.round(Math.abs(p) * 100)}%`;
+/** Half the two-sigma interval, as a percentage — the "± 7%" of the headline.
+ *  The interval is asymmetric because the fit is exponential, so this is its
+ *  half-width rather than either end of it. */
+const plusMinus = (f: Fit): string =>
+  `± ${Math.round(((fitTotal(f, 2) - fitTotal(f, -2)) / 2) * 100)}%`;
 
 /**
- * The headline. When the interval covers zero the app declines to name a
- * direction — a number that cannot be told from flat is not a finding, and
- * reporting it as one is the failure this whole design is arranged against.
- * That silence is correct rather than broken: at an ordinary rate of progress
- * it takes eight or twelve weeks of window before there is anything to say.
+ * The headline: the total over the window with its interval attached, the same
+ * shape the weight trend uses. The interval is the point — where it covers zero
+ * the number is not a finding, and reading "↑3% ± 9%" as progress is the
+ * failure this whole design is arranged against. At an ordinary rate of
+ * progress it takes eight or twelve weeks of window before the ± clears.
  */
 function renderStrength(s: Strength | null): void {
   const note = $("strength-note");
@@ -424,16 +426,11 @@ function renderStrength(s: Strength | null): void {
     return;
   }
 
-  const over = `over the last ${windowWords(fit.windowDays)}`;
-  note.textContent = withinNoise(fit)
-    ? `No clear change ${over}.`
-    : `Strength ${pct(fitTotal(fit))} ${over}` +
-      ` (${pct(fitTotal(fit, -2))} to ${pct(fitTotal(fit, 2))})`;
+  note.textContent =
+    `Strength ${pct(fitTotal(fit))} ${plusMinus(fit)} over ${fit.windowDays} days`;
 
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-  from.textContent =
-    `from ${plural(fit.points, "exercise-session")} across ${plural(fit.exercises, "exercise")}` +
-    ` · 100 on the chart is where the index starts, not a level`;
+  from.textContent = `from ${plural(fit.points, "exercise-session")} across ${plural(fit.exercises, "exercise")}`;
 }
 
 /**
@@ -569,11 +566,10 @@ function renderGoals(d: Day, est: Estimate | null): void {
   $("stats").textContent =
     `TDEE ${round(est.tdee)}${err} · from ${est.countedDays} of ${est.windowDays} days`;
 
-  const flat = t !== null && Math.abs(t.kgPerWeek) < t.stdErrKgPerWeek;
   $("trend-note").textContent =
     est.samples.length < 2
       ? `${est.samples.length} weigh-in so far — two are needed to draw a chart.`
-      : `${est.trendKg.toFixed(1)} kg · ${rate}${flat ? " (flat within noise)" : ""}`;
+      : `${est.trendKg.toFixed(1)} kg · ${rate}`;
 }
 
 function renderItems(d: Day): void {
