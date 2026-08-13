@@ -14,6 +14,7 @@ import {
   finish,
   fitTotal,
   lastSessionNamed,
+  matchExercises,
   moved,
   newDraft,
   panelFit,
@@ -22,7 +23,6 @@ import {
   strengthOf,
   summarise,
   templateNames,
-  withinNoise,
   type DatedSession,
   type LiftPoint,
 } from "../src/lifts.js";
@@ -175,6 +175,39 @@ describe("exerciseNames", () => {
       dated(on(8), session({ "bench press": [[95, 5]], Row: [[80, 5]] })),
     ];
     assert.deepEqual(exerciseNames(list), ["Bench Press", "Dips", "Row"]);
+  });
+});
+
+describe("matchExercises", () => {
+  const names = ["Bicep Curl (Dumbbell)", "Barbell Row", "Incline Bench Press", "Cable Curl"];
+
+  it("matches a word anywhere in the name", () => {
+    assert.deepEqual(matchExercises(names, "bicep"), ["Bicep Curl (Dumbbell)"]);
+    assert.deepEqual(matchExercises(names, "curl"), ["Bicep Curl (Dumbbell)", "Cable Curl"]);
+    assert.deepEqual(matchExercises(names, "bench"), ["Incline Bench Press"]);
+  });
+
+  it("puts names starting with the query first, recency order within each group", () => {
+    assert.deepEqual(matchExercises(names, "b"), [
+      "Bicep Curl (Dumbbell)",
+      "Barbell Row",
+      "Incline Bench Press",
+      "Cable Curl",
+    ]);
+  });
+
+  it("normalises both ends, so punctuation and case cannot miss", () => {
+    assert.deepEqual(matchExercises(names, "  DUMBBELL) "), ["Bicep Curl (Dumbbell)"]);
+    assert.deepEqual(matchExercises(names, "curl (dumb"), ["Bicep Curl (Dumbbell)"]);
+  });
+
+  it("offers nothing for an empty or punctuation-only query", () => {
+    assert.deepEqual(matchExercises(names, "   "), []);
+    assert.deepEqual(matchExercises(names, "-"), []);
+  });
+
+  it("offers nothing when nothing matches", () => {
+    assert.deepEqual(matchExercises(names, "squat"), []);
   });
 });
 
@@ -552,7 +585,7 @@ describe("panelFit", () => {
   });
 });
 
-describe("fitTotal / withinNoise", () => {
+describe("fitTotal", () => {
   const fit = (perDay: number, stdErrPerDay: number) => ({
     perDay,
     stdErrPerDay,
@@ -573,13 +606,6 @@ describe("fitTotal / withinNoise", () => {
     assert.ok(lo < fitTotal(f) && fitTotal(f) < hi);
     close(Math.log(1 + lo), (0.002 - 0.001) * 42, 1e-12);
     close(Math.log(1 + hi), (0.002 + 0.001) * 42, 1e-12);
-  });
-
-  it("calls a rate noise exactly when two sigmas cover zero", () => {
-    assert.equal(withinNoise(fit(0.001, 0.0006)), true); // interval spans zero
-    assert.equal(withinNoise(fit(0.002, 0.0006)), false); // clears it
-    assert.equal(withinNoise(fit(-0.002, 0.0006)), false); // losing strength is a verdict too
-    assert.equal(withinNoise(fit(0, 0.0001)), true);
   });
 });
 

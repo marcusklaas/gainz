@@ -30,8 +30,19 @@ body {
   background: var(--bg);
 }
 
-h1, h2 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 .5rem; }
-h1 { margin-top: 0; }
+/* The 1.5rem is space *between* sections, not space above a heading: it is
+   asked for by the element in front of it, so a heading that opens a screen —
+   Trend's "Weight", Settings' first fold — sits at the top the way Today's day
+   row does, while two headings down the same screen keep the full gap. */
+h1, h2 { font-size: 1rem; font-weight: 600; margin: 0 0 .5rem; }
+* + :is(h1, h2) { margin-top: 1.5rem; }
+
+/* Same idea one level down, for the screens that open on something other than a
+   heading: Lifts leads with a paragraph, whose own margin would otherwise push
+   it off the top edge. Only the leading element is trimmed — everything after
+   it spaces itself normally. */
+main > section > :first-child,
+main > section > :first-child > :first-child { margin-top: 0; }
 
 /* A tab bar across the bottom, where a thumb already is. Fixed rather than
    sticky: the nav is the first thing in the document, and a sticky element
@@ -421,6 +432,17 @@ li button { border: 0; background: none; padding: 0 .25rem; }
 
 #l-add-form { display: flex; gap: .4rem; }
 #l-add-form input { flex: 1; min-width: 0; }
+
+/* Sits directly under the box it belongs to, so it reads as the answer to what
+   is being typed rather than a second menu. Same chips as the templates: a name
+   you tap is a name you cannot spell differently to the one in history. */
+   The [hidden] rule is the one from #lift-resume again: an id selector with a
+   display in it beats the UA rule that [hidden] hides through. */
+#l-suggest { display: flex; flex-wrap: wrap; gap: .4rem; margin: -.4rem 0 .75rem; }
+#l-suggest[hidden] { display: none; }
+/* Full-strength text like the template chips: dim is for labels, and these are
+   the tap targets the screen is offering. */
+#l-suggest .chip { color: var(--fg); font-size: .85rem; }
 
 #lift-actions { display: flex; gap: .4rem; margin-top: 1.5rem; }
 #l-save { flex: 1; color: var(--fg); border-color: var(--fg); }

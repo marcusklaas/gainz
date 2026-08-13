@@ -17,6 +17,7 @@ import {
   finish,
   fitTotal,
   lastSessionNamed,
+  matchExercises,
   moved,
   newDraft,
   sessionsOf,
@@ -889,16 +890,60 @@ function renderEditor(): void {
     list.append(block);
   });
 
-  const names = exerciseNames(sessions);
-  const dl = $("exercise-names");
-  dl.replaceChildren();
-  for (const name of names) {
-    const o = document.createElement("option");
-    o.value = name;
-    dl.append(o);
-  }
-
+  renderSuggest();
   $<HTMLButtonElement>("l-save").disabled = confirmedSets(d) === 0;
+}
+
+/** At most this many suggestions. Enough that the one you mean is in it, few
+ *  enough that the row does not push the Add button off a phone screen. */
+const SUGGEST_MAX = 6;
+
+/**
+ * The matches for what is in the box, as chips under it. A chip adds its
+ * exercise outright rather than filling the field: what you wanted is the
+ * exercise, and the two-step of "pick, then press Add" is a step of nothing.
+ *
+ * An exact hit and nothing else is not shown — there is nothing left to offer
+ * once the name in the box already is the name in history.
+ */
+function renderSuggest(): void {
+  const box = $("l-suggest");
+  const query = val("l-exercise");
+  const hits = matchExercises(exerciseNames(sessions), query);
+  const only = hits.length === 1 && exerciseKey(hits[0]!) === exerciseKey(query);
+
+  box.replaceChildren();
+  box.hidden = hits.length === 0 || only;
+  if (box.hidden) return;
+
+  for (const name of hits.slice(0, SUGGEST_MAX)) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "chip";
+    b.textContent = name;
+    b.addEventListener("click", () => addExercise(name));
+    box.append(b);
+  }
+}
+
+/**
+ * Prefilled from the last time this movement was done in *any* session, not
+ * just this template — which is the answer to "what did I lift last time" no
+ * matter which day it was on.
+ */
+function addExercise(name: string): void {
+  ($("l-add-form") as HTMLFormElement).reset();
+  const previous = sessions
+    .flatMap((s) => s.session.exercises)
+    .find((x) => exerciseKey(x.name) === exerciseKey(name));
+  editDraft((d) => {
+    d.exercises.push({
+      name,
+      sets: previous
+        ? previous.sets.map((s) => ({ weight_kg: s.weight_kg, reps: s.reps }))
+        : [{ weight_kg: 0, reps: 0 }],
+    });
+  });
 }
 
 $("lift-resume").addEventListener("click", () => enter());
@@ -914,26 +959,16 @@ $("l-name").addEventListener("input", () => {
   if (d === draft) writeDraft(d);
 });
 
+// Submitting adds exactly what was typed, never the first suggestion: a new
+// exercise is added by typing its name, and having Enter silently pick
+// something else would make that impossible to do next to a near-match.
 $("l-add-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const name = val("l-exercise");
-  if (!name) return;
-  ($("l-add-form") as HTMLFormElement).reset();
-  // Prefilled from the last time this movement was done in *any* session, not
-  // just this template — which is the answer to "what did I lift last time" no
-  // matter which day it was on.
-  const previous = sessions
-    .flatMap((s) => s.session.exercises)
-    .find((x) => exerciseKey(x.name) === exerciseKey(name));
-  editDraft((d) => {
-    d.exercises.push({
-      name,
-      sets: previous
-        ? previous.sets.map((s) => ({ weight_kg: s.weight_kg, reps: s.reps }))
-        : [{ weight_kg: 0, reps: 0 }],
-    });
-  });
+  if (name) addExercise(name);
 });
+
+$("l-exercise").addEventListener("input", renderSuggest);
 
 $("l-save").addEventListener("click", async () => {
   const d = current();
