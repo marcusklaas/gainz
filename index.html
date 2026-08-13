@@ -133,18 +133,17 @@
 
     <div id="l-exercises"></div>
 
-    <!-- Suggestions are drawn rather than left to <datalist>: the native list
-         matches from the start of the name on the browsers that show it at all,
-         and picking "Bicep Curl (Dumbbell)" out of history by typing "curl" is
-         the whole point — a name typed from memory that misses by a word starts
-         a second series in the strength index. Outside the form because the
-         form is a flex row; a chip adds its exercise directly. -->
+    <!-- The list is every exercise in history, newest first, and the matching
+         is the browser's: <datalist> is the element for "this field has known
+         values but is not limited to them", which is exactly the case here, and
+         how well an engine filters it is that engine's business rather than
+         something to reimplement in a div. -->
     <form id="l-add-form">
-      <input id="l-exercise" placeholder="Add an exercise" required
+      <input id="l-exercise" list="exercise-names" placeholder="Add an exercise" required
         autocomplete="off" autocapitalize="none">
+      <datalist id="exercise-names"></datalist>
       <button>Add</button>
     </form>
-    <div id="l-suggest" hidden></div>
 
     <p id="lift-msg" class="msg"></p>
     <div id="lift-actions">

@@ -79,30 +79,6 @@ export function exerciseNames(list: DatedSession[]): string[] {
   );
 }
 
-/**
- * Past exercises matching what has been typed so far, best first. The match is
- * on the normalised key at both ends, so "bicep" and "Bicep " both find "Bicep
- * Curl (Dumbbell)" — anywhere in the name, because the word you remember is
- * often not the one the name starts with ("curl", "incline"). Names that start
- * with the query come first; within each group the recency order of
- * `exerciseNames` survives.
- *
- * This is the defence `exerciseKey` describes: picking the exercise you already
- * have has to be cheaper than retyping it, or the index fragments.
- */
-export function matchExercises(names: string[], query: string): string[] {
-  const q = exerciseKey(query);
-  if (!q) return [];
-  const starts: string[] = [];
-  const contains: string[] = [];
-  for (const name of names) {
-    const key = exerciseKey(name);
-    if (key.startsWith(q)) starts.push(name);
-    else if (key.includes(q)) contains.push(name);
-  }
-  return [...starts, ...contains];
-}
-
 /** The session a template prefills from. `exceptId` skips the one being edited,
  *  so reopening a saved session does not offer to prefill from itself. */
 export function lastSessionNamed(

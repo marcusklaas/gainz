@@ -433,17 +433,6 @@ li button { border: 0; background: none; padding: 0 .25rem; }
 #l-add-form { display: flex; gap: .4rem; }
 #l-add-form input { flex: 1; min-width: 0; }
 
-/* Sits directly under the box it belongs to, so it reads as the answer to what
-   is being typed rather than a second menu. Same chips as the templates: a name
-   you tap is a name you cannot spell differently to the one in history. */
-   The [hidden] rule is the one from #lift-resume again: an id selector with a
-   display in it beats the UA rule that [hidden] hides through. */
-#l-suggest { display: flex; flex-wrap: wrap; gap: .4rem; margin: -.4rem 0 .75rem; }
-#l-suggest[hidden] { display: none; }
-/* Full-strength text like the template chips: dim is for labels, and these are
-   the tap targets the screen is offering. */
-#l-suggest .chip { color: var(--fg); font-size: .85rem; }
-
 #lift-actions { display: flex; gap: .4rem; margin-top: 1.5rem; }
 #l-save { flex: 1; color: var(--fg); border-color: var(--fg); }
 #l-save:disabled { color: var(--dim); border-color: var(--line); cursor: default; }
