@@ -469,6 +469,22 @@ li button { border: 0; background: none; padding: 0 .25rem; }
   border-color: var(--fg);
 }
 
+/* Three ways of handing the same document somewhere else, so they sit as one
+   row of equals rather than one action and two afterthoughts. Share is hidden
+   where the browser has no share sheet, which is most desktops. */
+#export-actions { display: flex; gap: .4rem; margin: .75rem 0 .5rem; }
+#export-actions button { flex: 1; }
+#export-actions button:disabled { color: var(--line); cursor: default; }
+
+/* Small and monospaced: this is there to be glanced at and copied out of, not
+   read. The rows attribute keeps it a preview rather than a wall of csv. */
+#x-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .7rem;
+  line-height: 1.35;
+  color: var(--dim);
+}
+
 /* One line of explanation per setting, behind an ⓘ built by buildTips(). A
    mouse hovers it; a tap toggles .open, which is the same thing for a finger
    that has no hover to give. The bubble hangs off the label rather than the

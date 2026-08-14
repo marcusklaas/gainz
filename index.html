@@ -258,6 +258,29 @@
            the person editing them, whatever they are stored as. -->
       <button id="settings-save">Save settings</button>
     </form>
+
+    <!-- Outside the form, because none of it is a setting and none of it is
+         saved: opening the section builds the document, and the three buttons
+         are three ways of handing that same string to something else. It still
+         reads as one more folded section, which is what it is to look at. -->
+    <details id="export">
+      <summary><h2>Export for AI</h2></summary>
+      <p class="note">Builds one document — recent days, weeks, sessions and food
+        log, with the derived numbers and the notes needed to read them — to paste
+        into Claude or ChatGPT and ask questions about. It contains every food
+        description you have typed, and it leaves your private repo.</p>
+      <div id="export-actions">
+        <button id="x-copy" type="button" disabled>Copy</button>
+        <button id="x-share" type="button" hidden>Share</button>
+        <button id="x-download" type="button" disabled>Download</button>
+      </div>
+      <p id="export-size" class="note"></p>
+      <p id="export-msg" class="msg"></p>
+      <!-- The fallback for a clipboard that refuses, and the answer to "what is
+           it actually sending" — which is worth being able to look at before
+           pasting your food diary into someone else's model. -->
+      <textarea id="x-text" rows="6" readonly hidden aria-label="The export document"></textarea>
+    </details>
     <p id="settings-msg" class="msg"></p>
   </section>
 </main>
