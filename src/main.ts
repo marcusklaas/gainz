@@ -132,9 +132,11 @@ function needsConfig(): void {
   show("settings");
 }
 
-/** The folded settings, which is not every folded thing on the screen: the
- *  export section is an action and has no values to review. */
-const sections = () => document.querySelectorAll<HTMLDetailsElement>("#settings-form details");
+/** The folded settings, which is not every folded section on the screen. The
+ *  export sits among them but holds no values to review, and unfolding it would
+ *  fire a build against a repo that has not been configured yet. */
+const sections = () =>
+  document.querySelectorAll<HTMLDetailsElement>("#settings details:not(#export)");
 
 // ----------------------------------------------------------------- screens
 
