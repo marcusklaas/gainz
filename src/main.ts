@@ -8,6 +8,7 @@ import {
   weekSummary,
   type Estimate,
 } from "./estimate.js";
+import { buildContext, contextFrom } from "./export.js";
 import { checkAccess } from "./github.js";
 import {
   confirmedSets,
@@ -131,7 +132,11 @@ function needsConfig(): void {
   show("settings");
 }
 
-const sections = () => document.querySelectorAll<HTMLDetailsElement>("#settings details");
+/** The folded settings, which is not every folded section on the screen. The
+ *  export sits among them but holds no values to review, and unfolding it would
+ *  fire a build against a repo that has not been configured yet. */
+const sections = () =>
+  document.querySelectorAll<HTMLDetailsElement>("#settings details:not(#export)");
 
 // ----------------------------------------------------------------- screens
 
@@ -1147,6 +1152,117 @@ $("settings-form").addEventListener("submit", async (e) => {
   await render();
   $("config-banner").hidden = true;
   flash("settings-msg", "Saved.");
+});
+
+// -------------------------------------------------------------------- export
+//
+// The document is built here and handed straight to the platform: clipboard,
+// share sheet, or a file. There is no upload and no third party — where it goes
+// is whatever the user pastes it into, which is the only reason this is a
+// button and not a feature with an API key behind it.
+
+/** The last document built, and what all three buttons act on. */
+let exported: string | null = null;
+
+const exportFile = () => `gainz-context-${todayKey()}.md`;
+
+/**
+ * When the export was taken, and where in the world "today" means. Built by
+ * hand rather than with toLocaleString, which renders 8/14/2026 in one locale
+ * and 14-8-2026 in the next — an ambiguity the document spends a section
+ * avoiding everywhere else. The zone is named because every day key below it is
+ * a local calendar date and nothing else says which local.
+ */
+function stamp(): string {
+  const t = new Date();
+  const hhmm = `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+  return `${todayKey()} ${hhmm} ${Intl.DateTimeFormat().resolvedOptions().timeZone}`;
+}
+
+const exportButtons = () => ["x-copy", "x-share", "x-download"].map((id) => $<HTMLButtonElement>(id));
+
+/**
+ * Rebuilt every time the section is opened rather than cached, so what gets
+ * pasted is never a stale copy of this morning. It costs nothing after the
+ * first: the months it reads are fetched once per session by the store, and
+ * everything downstream is arithmetic.
+ */
+async function buildExport(): Promise<void> {
+  const today = todayKey();
+  for (const b of exportButtons()) b.disabled = true;
+  msg("export-msg", "Building…");
+
+  try {
+    const days = await readRange(contextFrom(today), today);
+    exported = buildContext(cachedConfig() ?? defaultConfig(), days, {
+      today,
+      generatedAt: stamp(),
+    });
+  } catch (e) {
+    msg("export-msg", `Could not build the export: ${(e as Error).message}`, "err");
+    return;
+  }
+
+  const text = $<HTMLTextAreaElement>("x-text");
+  text.value = exported;
+  text.hidden = false;
+  // Both figures, because they answer different questions: kilobytes for
+  // whether a paste box will take it, tokens for whether a chat will.
+  $("export-size").textContent =
+    `${Math.round(exported.length / 1024)} KB · roughly ${Math.round(exported.length / 4000)}k tokens`;
+  msg("export-msg", "");
+  for (const b of exportButtons()) b.disabled = false;
+}
+
+const exportSection = $<HTMLDetailsElement>("export");
+exportSection.addEventListener("toggle", () => {
+  if (exportSection.open) void buildExport();
+});
+
+$("x-copy").addEventListener("click", async () => {
+  if (!exported) return;
+  try {
+    await navigator.clipboard.writeText(exported);
+    flash("export-msg", "Copied. Paste it into a chat and ask your question.");
+  } catch {
+    // Denied, or an insecure context. The textarea below is already the answer.
+    $<HTMLTextAreaElement>("x-text").select();
+    msg("export-msg", "Clipboard refused — the text below is selected, copy it by hand.", "err");
+  }
+});
+
+// The one that matters on a phone: the share sheet puts the document into the
+// Claude or ChatGPT app directly. As a file where the platform will take one,
+// since a composer handles an attachment better than a 30 KB paste, and as text
+// where it will not. Hidden entirely where there is no sheet to open.
+const shareButton = $<HTMLButtonElement>("x-share");
+if (typeof navigator.share === "function") shareButton.hidden = false;
+
+shareButton.addEventListener("click", async () => {
+  if (!exported) return;
+  const file = new File([exported], exportFile(), { type: "text/markdown" });
+  try {
+    if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file] });
+    else await navigator.share({ text: exported });
+  } catch (e) {
+    // Dismissing the sheet rejects, and is not a failure worth reporting.
+    if ((e as Error).name !== "AbortError") {
+      msg("export-msg", `Share failed: ${(e as Error).message}`, "err");
+    }
+  }
+});
+
+$("x-download").addEventListener("click", () => {
+  if (!exported) return;
+  const url = URL.createObjectURL(new Blob([exported], { type: "text/markdown" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = exportFile();
+  a.click();
+  // Revoked on the next turn rather than immediately: the click starts the save
+  // asynchronously, and pulling the URL out from under it can cancel it.
+  setTimeout(() => URL.revokeObjectURL(url));
+  flash("export-msg", "Saved. Attach it to a chat and ask your question.");
 });
 
 // -------------------------------------------------------------------- start

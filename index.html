@@ -253,6 +253,30 @@
         <label data-tip="Used by Estimate when the provider is openai. Kept on this device only.">OpenAI API key <input id="c-openai" type="password" autocomplete="off"></label>
       </details>
 
+      <!-- The one section that saves nothing: opening it builds the document,
+           and its three buttons are three ways of handing that same string to
+           something else, each acting the moment it is pressed. It sits with
+           the rest because it reads as one more folded section, and because a
+           stray thing below the save button is a thing nobody scrolls to. -->
+      <details id="export">
+        <summary><h2>Export for AI</h2></summary>
+        <p class="note">Builds one document — recent days, weeks, sessions and food
+          log, with the derived numbers and the notes needed to read them — to paste
+          into Claude or ChatGPT and ask questions about. It contains every food
+          description you have typed, and it leaves your private repo.</p>
+        <div id="export-actions">
+          <button id="x-copy" type="button" disabled>Copy</button>
+          <button id="x-share" type="button" hidden>Share</button>
+          <button id="x-download" type="button" disabled>Download</button>
+        </div>
+        <p id="export-size" class="note"></p>
+        <p id="export-msg" class="msg"></p>
+        <!-- The fallback for a clipboard that refuses, and the answer to "what
+             is it actually sending" — which is worth being able to look at
+             before pasting your food diary into someone else's model. -->
+        <textarea id="x-text" rows="6" readonly hidden aria-label="The export document"></textarea>
+      </details>
+
       <!-- One button for the whole screen. Two forms meant two saves and a
            button stranded halfway down the page; the settings are one thing to
            the person editing them, whatever they are stored as. -->
