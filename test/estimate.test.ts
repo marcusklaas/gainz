@@ -11,6 +11,7 @@ import {
   estimate,
   holtSeries,
   mifflinBmr,
+  projection,
   weekSummary,
   weightSamples,
   type Sample,
@@ -264,6 +265,49 @@ describe("holtSeries slope", () => {
       assert.ok(step < peak / 10, `influence jumped ${step} on day ${i}, peak ${peak}`);
     }
     assert.ok(influence[89]! < peak / 5, "an 84-day-old outlier should be mostly spent");
+  });
+});
+
+// ---------------------------------------------------------------- projection
+
+describe("projection", () => {
+  const trend = (kgs: number[]) => holtSeries(kgs.map((kg, i) => ({ day: on(i), kg })), 6, 6);
+
+  it("is empty when there is nothing to project from, or nowhere to project to", () => {
+    assert.deepEqual(projection([], 7), []);
+    assert.deepEqual(projection(trend([80, 81]), 0), []);
+    assert.deepEqual(projection(trend([80, 81]), -3), []);
+  });
+
+  it("starts on the last trend point, so the two lines meet", () => {
+    // Not one day after it. The caller draws this as its own series, and a gap
+    // here shows up as a dashed line floating beside the solid one.
+    const t = trend([80, 80.4, 80.9, 81.1]);
+    const last = t.at(-1)!;
+    const p = projection(t, 7);
+    assert.equal(p.length, 8, "the shared point, plus one per projected day");
+    assert.equal(p[0]!.day, last.day);
+    close(p[0]!.kg, last.kg, 1e-12);
+  });
+
+  it("carries the reported rate exactly", () => {
+    // The whole point of drawing it: the gradient of this line is the number in
+    // the headline. If the two ever disagree the chart contradicts the app.
+    const t = trend(Array.from({ length: 60 }, (_, i) => 80 - 0.03 * i));
+    const p = projection(t, 14);
+    close((p.at(-1)!.kg - p[0]!.kg) / 14, t.at(-1)!.slope, 1e-12);
+  });
+
+  it("is straight, one point per day", () => {
+    const p = projection(trend([80, 80.6, 81.4, 81.5, 82.2]), 10);
+    for (let i = 1; i < p.length; i++) {
+      assert.equal(p[i]!.day, addDays(p[0]!.day, i), "no gaps");
+      close(p[i]!.kg - p[i - 1]!.kg, p[1]!.kg - p[0]!.kg, 1e-12);
+    }
+  });
+
+  it("stays flat when the smoother has no trend to carry", () => {
+    for (const s of projection(trend(Array(40).fill(80)), 7)) close(s.kg, 80, 1e-6);
   });
 });
 

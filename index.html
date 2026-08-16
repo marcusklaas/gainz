@@ -208,6 +208,7 @@
         <label data-tip="How fast the smoothed weight follows the scale. Shorter reacts sooner and jumps around more.">Level half-life days <input id="e-level" type="number" required></label>
         <label data-tip="How fast the estimated rate of change adapts. Longer is calmer.">Trend half-life days <input id="e-trend" type="number" required></label>
         <label data-tip="How far back to load. Warms up the smoother and sets the span of the Trend chart.">History days <input id="e-history" type="number" required></label>
+        <label data-tip="How far past the last weigh-in the Trend chart carries the current rate, as a dashed line. 0 hides it.">Projection days <input id="e-projection" type="number" min="0" required></label>
         <label data-tip="How many recent days the measured TDEE is fitted over — intake against weight change.">TDEE window days <input id="e-window" type="number" required></label>
         <label data-tip="How many fully logged days before the measured TDEE is trusted on its own. Below this it is blended with the formula estimate.">Full-confidence days <input id="e-confidence" type="number" required></label>
         <label data-tip="How much of the accumulated miss is handed back each day, shifting the whole band. 0 turns the correction off.">Bias gain (0 turns it off) <input id="e-bias-gain" type="number" step="0.05" min="0" required></label>

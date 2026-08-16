@@ -7,7 +7,7 @@
 // data. It is the only runtime dependency in the project.
 import uPlot from "../vendor/uPlot.esm.js";
 import { parseDay } from "./dates.js";
-import type { Sample } from "./estimate.js";
+import { projection, type HoltPoint, type Sample } from "./estimate.js";
 import type { IndexPoint } from "./lifts.js";
 
 const DAY_SECONDS = 86_400;
@@ -22,23 +22,50 @@ const DAY_SECONDS = 86_400;
 const HEIGHT = 280;
 
 /**
- * How much history the chart opens on. Recent enough that day-to-day movement
- * is legible, long enough that the trend line means something. Everything older
- * is still there — zoom or pan out to reach it.
+ * How much history to open on when there is no config to say — only reachable
+ * before the first save, since every configured field has a default.
  */
-const DEFAULT_SPAN_DAYS = 21;
+const FALLBACK_SPAN_DAYS = 21;
 
 /** Local midnight as unix seconds — uPlot's native x unit. */
 const toX = (s: { day: string }) => parseDay(s.day).getTime() / 1000;
 
-let plot: uPlot | null = null;
-/** Full data extent, so pan/zoom can be clamped to it. */
-let bounds = { min: 0, max: 0 };
+/** What the default view spans, in days either side of the last weigh-in. */
+export interface Span {
+  /** History, back from the last weigh-in. */
+  historyDays: number;
+  /** How far the tangent is carried past it. */
+  projectionDays: number;
+}
 
-/** The window the chart opens at and returns to on double-click. */
+let plot: uPlot | null = null;
+/** Full extent including the projection, so pan/zoom can be clamped to it. */
+let bounds = { min: 0, max: 0 };
+/** Seconds of `bounds` that are projected rather than measured. */
+let projected = 0;
+/** Seconds of history the default view opens on. */
+let history = FALLBACK_SPAN_DAYS * DAY_SECONDS;
+
+/**
+ * The window the chart opens at and returns to on double-click: everything that
+ * fed the current TDEE estimate, plus where it says the next week goes.
+ *
+ * History is counted back from the last real weigh-in rather than from the right
+ * edge, with the projection added on top — otherwise turning the projection on
+ * would silently eat a week of history out of the view.
+ *
+ * That anchor is the last weigh-in, while the intake window it is sized from
+ * counts back from today. The two coincide on any day that has been weighed,
+ * which is nearly all of them; after a few days off the scale the view drifts
+ * older than the window by however long the gap is. Not worth correcting, since
+ * the alternative — anchoring on today — would leave dead space on the right of
+ * a chart whose whole right-hand side is the point.
+ *
+ * Everything outside is still there. Zoom or pan out to reach it.
+ */
 function defaultView(): { min: number; max: number } {
   return {
-    min: Math.max(bounds.max - DEFAULT_SPAN_DAYS * DAY_SECONDS, bounds.min),
+    min: Math.max(bounds.max - projected - history, bounds.min),
     max: bounds.max,
   };
 }
@@ -196,6 +223,18 @@ function options(width: number): uPlot.Options {
         points: { show: false },
         value: (_u, v) => (v == null ? "—" : `${v.toFixed(2)} kg`),
       },
+      {
+        // Same colour as the trend, because it is the same line continued —
+        // dashed is the whole distinction, and a second colour would read as a
+        // second quantity. Thinner too: a forecast should not draw the eye
+        // harder than the measurement it is drawn from.
+        label: "projected",
+        stroke: c.ok,
+        width: 1.5,
+        dash: [3, 4],
+        points: { show: false },
+        value: (_u, v) => (v == null ? "—" : `${v.toFixed(2)} kg`),
+      },
     ],
     plugins: [panZoom()],
   };
@@ -205,7 +244,7 @@ function options(width: number): uPlot.Options {
  * Draws or updates the chart. Must be called while the container is visible —
  * uPlot sizes from the element, and a hidden section measures zero.
  */
-export function drawTrend(el: HTMLElement, samples: Sample[], ewma: Sample[]): void {
+export function drawTrend(el: HTMLElement, samples: Sample[], trend: HoltPoint[], span: Span): void {
   if (samples.length < 2) {
     plot?.destroy();
     plot = null;
@@ -213,8 +252,31 @@ export function drawTrend(el: HTMLElement, samples: Sample[], ewma: Sample[]): v
     return;
   }
 
-  const data: uPlot.AlignedData = [samples.map(toX), samples.map((s) => s.kg), ewma.map((s) => s.kg)];
-  bounds = { min: data[0][0]!, max: data[0][data[0].length - 1]! };
+  // The projection adds days on the right that no weigh-in covers, so all three
+  // series are padded onto one x column — which is what uPlot's aligned data
+  // wants: one x, and a null wherever a series has nothing to say. `trend`
+  // carries one point per sample, so only the projected days extend past them.
+  const proj = projection(trend, span.projectionDays); // the anchor, then one per day
+  const future = proj.slice(1);
+  const xs = [...samples.map(toX), ...future.map(toX)];
+  const pad = future.map(() => null);
+
+  // Nulls up to the anchor, which is the last trend point repeated: the dashes
+  // start *on* the solid line rather than a day to its right. Empty when the
+  // projection is switched off, leaving the series present but blank.
+  const tangent: (number | null)[] = xs.map(() => null);
+  proj.forEach((p, i) => (tangent[samples.length - 1 + i] = p.kg));
+
+  const data: uPlot.AlignedData = [
+    xs,
+    [...samples.map((s) => s.kg), ...pad],
+    [...trend.map((s) => s.kg), ...pad],
+    tangent,
+  ];
+
+  projected = future.length * DAY_SECONDS;
+  history = Math.max(span.historyDays, 1) * DAY_SECONDS;
+  bounds = { min: xs[0]!, max: xs[xs.length - 1]! };
 
   const width = el.clientWidth;
   if (!width) return; // container still hidden; caller redraws on show

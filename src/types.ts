@@ -183,6 +183,8 @@ export interface Config {
     trendHalfLifeDays: number;
     /** How far back to load. Warms up the smoother and sets the chart span. */
     historyDays: number;
+    /** How far past the last weigh-in the chart carries the current slope. 0 hides it. */
+    projectionDays: number;
     tdeeWindowDays: number;
     blendFullConfidenceDays: number;
     activityFactor: number;

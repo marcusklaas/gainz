@@ -37,6 +37,11 @@ export const FIELDS: readonly Field[] = [
   ["e-level", "estimator.levelHalfLifeDays", 6],
   ["e-trend", "estimator.trendHalfLifeDays", 6],
   ["e-history", "estimator.historyDays", 180],
+  // A week. Long enough that the tangent has a visible gradient at any sane
+  // chart span, short enough to stay inside the horizon the slope is actually
+  // about: its weights have a mean age of eight days, so a projection much
+  // longer than that is extrapolating a rate from data older than the forecast.
+  ["e-projection", "estimator.projectionDays", 7],
   ["e-window", "estimator.tdeeWindowDays", 21],
   ["e-confidence", "estimator.blendFullConfidenceDays", 14],
   ["e-bias-gain", "estimator.biasGain", 0.3],

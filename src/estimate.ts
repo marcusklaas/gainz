@@ -74,6 +74,34 @@ export function holtSeries(
   return out;
 }
 
+/**
+ * The smoother's current slope carried forward from where it left off, one
+ * point per day, starting at the last trend point itself.
+ *
+ * This is the one place the reported rate becomes legible. The headline number
+ * is an average of the trend line's own gradient over roughly the last eight
+ * days, and eight days is too little width to read a gradient off at any useful
+ * chart span — so the drawn curve can look like it is rising while the headline
+ * says falling, with both correct. A tangent puts the two next to each other.
+ *
+ * It repeats the last trend point rather than starting a day after it, so the
+ * caller can draw this as its own line and have it grow out of the solid one
+ * instead of floating a day to its right.
+ *
+ * Straight, not curved: the model's forecast genuinely is a straight line. Holt
+ * holds its slope until an observation moves it, so anything else drawn here
+ * would be a claim the estimator is not making.
+ */
+export function projection(trend: HoltPoint[], days: number): Sample[] {
+  const last = trend[trend.length - 1];
+  if (last === undefined || days <= 0) return [];
+  const out: Sample[] = [{ day: last.day, kg: last.kg }];
+  for (let k = 1; k <= days; k++) {
+    out.push({ day: addDays(last.day, k), kg: last.kg + last.slope * k });
+  }
+  return out;
+}
+
 export function mifflinBmr(bio: Config["bio"], kg: number, on: DayKey): number {
   // Both are plain ISO dates, so both parse as UTC midnight and the difference
   // between them carries no timezone.
