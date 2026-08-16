@@ -216,7 +216,7 @@ function rollup(
     inBand,
     weightStart: weights[0] ?? null,
     weightEnd: weights[weights.length - 1] ?? null,
-    kgPerWeek: est?.trend?.kgPerWeek ?? null,
+    kgPerWeek: est?.kgPerWeek ?? null,
     tdee: est?.tdee ?? null,
     sessions,
     sets,
@@ -294,12 +294,12 @@ function now(cfg: Config, days: Map<DayKey, Day>, today: DayKey): string {
   const lines: string[] = [`## Where things stand on ${today}`, ""];
 
   if (est) {
-    const t = est.trend;
     lines.push(
       `- Smoothed weight ${est.trendKg.toFixed(1)} kg` +
-        (t ? `, moving ${t.kgPerWeek >= 0 ? "+" : ""}${t.kgPerWeek.toFixed(2)} ± ${(2 * t.stdErrKgPerWeek).toFixed(2)} kg/week (2σ)` : ", rate not yet measurable"),
+        (est.kgPerWeek === null
+          ? ", rate not yet measurable"
+          : `, moving ${est.kgPerWeek >= 0 ? "+" : ""}${est.kgPerWeek.toFixed(2)} kg/week`),
       `- TDEE ${Math.round(est.tdee)} kcal` +
-        (est.tdeeStdErr !== null ? ` ± ${Math.round(2 * est.tdeeStdErr)} (2σ)` : " (formula estimate, not yet measured)") +
         `, from ${est.countedDays} counted days in the last ${est.windowDays}`,
       `- Today's band ${Math.round(est.kcalLower)}–${Math.round(est.kcalUpper)} kcal;` +
         ` uncorrected goal ${Math.round(est.goalKcal)}, bias ${est.bias.kcal >= 0 ? "+" : ""}${Math.round(est.bias.kcal)} kcal over ${est.bias.days} counted days`,

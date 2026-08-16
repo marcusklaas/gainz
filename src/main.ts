@@ -558,23 +558,15 @@ function renderGoals(d: Day, est: Estimate | null): void {
         ? `In range · room for ${round(est.kcalUpper - kcal)} more`
         : `${round(est.kcalLower - kcal)} more to reach range · ${round(est.kcalUpper - kcal)} to spare`;
 
-  // Showing the standard error alongside the rate is what makes it readable:
-  // -0.09 ± 0.11 kg/wk is not a loss, it is indistinguishable from flat.
-  const t = est.trend;
-  const rate = t
-    ? `${t.kgPerWeek >= 0 ? "↑" : "↓"}${Math.abs(t.kgPerWeek).toFixed(2)}` +
-      ` ± ${t.stdErrKgPerWeek.toFixed(2)} kg/wk over ${est.windowDays} days`
-    : `not enough weigh-ins in the last ${est.windowDays} days`;
-  const err = est.tdeeStdErr === null ? "" : ` ±${round(est.tdeeStdErr)}`;
-
   // Today carries only what bears on today's targets; the trend lives on Trend.
   $("stats").textContent =
-    `TDEE ${round(est.tdee)}${err} · from ${est.countedDays} of ${est.windowDays} days`;
+    `TDEE ${round(est.tdee)} · from ${est.countedDays} of ${est.windowDays} days`;
 
   $("trend-note").textContent =
-    est.samples.length < 2
+    est.kgPerWeek === null
       ? `${est.samples.length} weigh-in so far — two are needed to draw a chart.`
-      : `${est.trendKg.toFixed(1)} kg · ${rate}`;
+      : `${est.trendKg.toFixed(1)} kg · ${est.kgPerWeek >= 0 ? "↑" : "↓"}` +
+        `${Math.abs(est.kgPerWeek).toFixed(2)} kg/wk`;
 }
 
 function renderItems(d: Day): void {

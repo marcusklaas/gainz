@@ -11,7 +11,6 @@ import {
   estimate,
   holtSeries,
   mifflinBmr,
-  regress,
   weekSummary,
   weightSamples,
   type Sample,
@@ -103,7 +102,7 @@ describe("holtSeries", () => {
 
   it("handles the empty and single-sample cases", () => {
     assert.deepEqual(holtSeries([], 10, 28), []);
-    assert.deepEqual(holtSeries(series([80]), 10, 28), [{ day: DAY0, kg: 80 }]);
+    assert.deepEqual(holtSeries(series([80]), 10, 28), [{ day: DAY0, kg: 80, slope: 0 }]);
   });
 
   it("starts on the first reading rather than at zero", () => {
@@ -180,73 +179,91 @@ describe("holtSeries", () => {
   });
 });
 
-// ---------------------------------------------------------- regression
+// ------------------------------------------------------------ the slope
+//
+// The slope used to be an internal of the smoother, with TDEE derived from a
+// separate windowed regression. It is now what TDEE is built on, so it carries
+// the properties that regression was there to provide — asserted here on the
+// estimator that actually ships.
 
-describe("regress", () => {
-  it("is null below three samples", () => {
-    assert.equal(regress([]), null);
-    assert.equal(regress([{ day: on(0), kg: 80 }]), null);
-    assert.equal(
-      regress([
-        { day: on(0), kg: 80 },
-        { day: on(1), kg: 81 },
-      ]),
-      null,
-    );
-  });
+describe("holtSeries slope", () => {
+  const series = (kgs: number[]): Sample[] => kgs.map((kg, i) => ({ day: on(i), kg }));
+  const slopeOf = (samples: Sample[], lvl = 10, trend = 28) =>
+    holtSeries(samples, lvl, trend).at(-1)!.slope;
 
-  it("is null when every sample is on the same day", () => {
-    const sameDay = [80, 81, 82].map((kg) => ({ day: DAY0, kg }));
-    assert.equal(regress(sameDay), null);
-  });
-
-  it("recovers an exact line with no residual error", () => {
-    // 0.2 kg/day is 1.4 kg/week, and a perfect fit has nothing left over.
-    const samples = Array.from({ length: 10 }, (_, i) => ({ day: on(i), kg: 80 + 0.2 * i }));
-    const t = regress(samples)!;
-    close(t.kgPerWeek, 1.4, 1e-9, "slope");
-    close(t.stdErrKgPerWeek, 0, 1e-9, "stderr");
+  it("is zero before there is anything to measure", () => {
+    assert.equal(holtSeries(series([80]), 10, 28)[0]!.slope, 0);
   });
 
   it("finds no trend in a flat series", () => {
-    const t = regress(Array.from({ length: 10 }, (_, i) => ({ day: on(i), kg: 80 })))!;
-    close(t.kgPerWeek, 0, 1e-9);
+    close(slopeOf(series(Array(40).fill(80))), 0, 1e-9);
   });
 
-  it("recovers the line through noise and reports the textbook error bar", () => {
-    // Residuals of ±0.4 in a +,−,−,+ pattern. Over each block of four that is
-    // orthogonal to both a constant and a ramp, so at a length divisible by four
-    // it perturbs neither the intercept nor the slope, and every residual stays
-    // exactly ±0.4 after fitting. That makes the whole standard error closeable
-    // by hand rather than asserted against whatever the code happened to print.
-    const n = 20;
-    const wobble = [0.4, -0.4, -0.4, 0.4];
-    const samples = Array.from({ length: n }, (_, i) => ({
-      day: on(i),
-      kg: 80 - 0.1 * i + wobble[i % 4]!,
-    }));
-
-    const t = regress(samples)!;
-    close(t.kgPerWeek, -0.7, 1e-12, "slope");
-
-    // SSE = 20·0.4²; Sxx = Σ(i − 9.5)² over i = 0..19 = 665. The divisor is the
-    // interesting part: n−2 degrees of freedom, an intercept and a slope spent.
-    const sse = n * 0.4 ** 2;
-    const sxx = samples.reduce((a, _, i) => a + (i - 9.5) ** 2, 0);
-    assert.equal(sxx, 665);
-    close(t.stdErrKgPerWeek, Math.sqrt(sse / (n - 2) / sxx) * DAYS_PER_WEEK, 1e-12);
+  it("converges on the true rate of a steady ramp", () => {
+    // The property TDEE depends on: given a constant 0.2 kg/day the smoother
+    // must report 0.2 kg/day, not merely something proportional to it.
+    //
+    // The residual error is a fixed *fraction* of the ramp — 0.25% at 120
+    // samples, for every rate tried — so the tolerance has to be relative. An
+    // absolute one would be slack at 0.01 kg/day and unmeetable at 0.2.
+    for (const perDay of [0.2, -0.05, 0.01]) {
+      const ramp = (n: number) =>
+        slopeOf(series(Array.from({ length: n }, (_, i) => 80 + perDay * i)));
+      const err = Math.abs(ramp(120) - perDay) / Math.abs(perDay);
+      assert.ok(err < 0.005, `${perDay} kg/day: off by ${(err * 100).toFixed(2)}%`);
+      // Converging, not merely close: more data has to mean less error.
+      assert.ok(Math.abs(ramp(240) - perDay) < Math.abs(ramp(120) - perDay));
+    }
   });
 
-  it("ignores gaps: the fit is against elapsed days, not sample index", () => {
-    const dense = Array.from({ length: 8 }, (_, i) => ({ day: on(i), kg: 80 + 0.2 * i }));
-    const sparse = [0, 3, 7, 8, 20].map((d) => ({ day: on(d), kg: 80 + 0.2 * d }));
-    close(regress(sparse)!.kgPerWeek, regress(dense)!.kgPerWeek, 1e-9);
+  it("reads elapsed days, not sample index, so gaps do not inflate it", () => {
+    // Same underlying ramp, weighed every third day. A smoother that counted
+    // samples rather than days would report a rate three times too steep.
+    const perDay = 0.1;
+    const dense = Array.from({ length: 120 }, (_, i) => ({ day: on(i), kg: 80 + perDay * i }));
+    const sparse = dense.filter((_, i) => i % 3 === 0);
+    assert.ok(Math.abs(slopeOf(sparse) - perDay) / perDay < 0.01, "sparse finds the true rate");
+    assert.ok(Math.abs(slopeOf(sparse) - slopeOf(dense)) / perDay < 0.01, "sparse matches dense");
   });
 
   it("is unmoved by shifting the whole series in time", () => {
-    const base = Array.from({ length: 6 }, (_, i) => ({ day: on(i), kg: 80 + 0.3 * i }));
+    const base = Array.from({ length: 40 }, (_, i) => ({ day: on(i), kg: 80 + 0.3 * i }));
     const later = base.map((s) => ({ day: addDays(s.day, 500), kg: s.kg }));
-    close(regress(later)!.kgPerWeek, regress(base)!.kgPerWeek, 1e-9);
+    close(slopeOf(later), slopeOf(base), 1e-12);
+  });
+
+  it("survives two samples landing on one day", () => {
+    // The gap is floored at one day, so a same-day pair must not divide by zero.
+    const out = holtSeries([...series([80, 81]), { day: on(1), kg: 82 }], 10, 28);
+    for (const p of out) assert.ok(Number.isFinite(p.slope));
+  });
+
+  it("has no window to fall out of: an old outlier decays instead of dropping", () => {
+    // The whole reason for the change. One bad reading, then a long clean
+    // stretch: its influence has to fade *continuously*. A trailing window
+    // instead carries its oldest sample at full weight and then loses it in a
+    // single step, which is what made TDEE lurch.
+    const clean = Array.from({ length: 90 }, (_, i) => ({ day: on(i), kg: 80 }));
+    const spiked = clean.map((s, i) => (i === 5 ? { ...s, kg: 83 } : s));
+
+    const influence = clean.map((_, i) =>
+      Math.abs(
+        holtSeries(spiked.slice(0, i + 1), 10, 28).at(-1)!.slope -
+          holtSeries(clean.slice(0, i + 1), 10, 28).at(-1)!.slope,
+      ),
+    );
+    const peak = Math.max(...influence);
+
+    // Continuity is the assertion, and it is the one a window fails: no single
+    // day may shed more than a tenth of the peak. Note this is deliberately not
+    // a monotonicity check. Every slope estimator's weights sum to zero, so its
+    // influence must cross zero and come back up the far side — here around day
+    // 31 — and demanding monotone decay would be asserting something false.
+    for (let i = 6; i < influence.length; i++) {
+      const step = Math.abs(influence[i]! - influence[i - 1]!);
+      assert.ok(step < peak / 10, `influence jumped ${step} on day ${i}, peak ${peak}`);
+    }
+    assert.ok(influence[89]! < peak / 5, "an 84-day-old outlier should be mostly spent");
   });
 });
 
@@ -392,8 +409,7 @@ describe("estimate", () => {
 
     close(e.tdee, mifflinBmr(cfg.bio, 80, today) * cfg.estimator.activityFactor, 1e-9);
     assert.equal(e.countedDays, 0);
-    assert.equal(e.tdeeStdErr, null);
-    assert.equal(e.trend, null);
+    assert.equal(e.kgPerWeek, null);
     assert.equal(e.bias.days, 0);
     close(e.bias.kcal, 0, 1e-9);
     close(e.targetKcal, e.goalKcal, 1e-9);
@@ -407,20 +423,24 @@ describe("estimate", () => {
     const e = estimate(cfg, days, today)!;
 
     assert.equal(e.countedDays, cfg.estimator.tdeeWindowDays);
-    close(e.trend!.kgPerWeek, 0, 1e-9);
+    close(e.kgPerWeek!, 0, 1e-9);
     close(e.tdee, 2600, 1e-9);
     close(e.goalKcal, 2600 + cfg.goal.kcalOffset, 1e-9);
   });
 
   it("charges weight change against intake at the fat-equivalent rate", () => {
     // Losing 0.5 kg/week on 2000 kcal/day means burning 2000 + 7700·0.5/7.
+    //
+    // A smoother approaches a steady rate rather than landing on it, so the
+    // tolerances here are the honest residual after sixty days — about 2% of
+    // the rate, and the ~10 kcal of TDEE that implies. Demanding more would be
+    // asserting that an exponential has finished.
     const cfg = config({ biasGain: 0 });
     const days = history(60, (i) => ({ ...logged(2000, 2000), weight_kg: 90 - (0.5 / 7) * i }));
     const e = estimate(cfg, days, today)!;
 
-    close(e.trend!.kgPerWeek, -0.5, 1e-9, "trend");
-    close(e.tdee, 2000 + (0.5 * KCAL_PER_KG_FAT) / DAYS_PER_WEEK, 1e-6, "tdee");
-    assert.ok(e.tdeeStdErr !== null && e.tdeeStdErr >= 0);
+    close(e.kgPerWeek!, -0.5, 0.5 * 0.02, "trend");
+    close(e.tdee, 2000 + (0.5 * KCAL_PER_KG_FAT) / DAYS_PER_WEEK, 12, "tdee");
   });
 
   it("blends from formula to measurement in proportion to logged days", () => {
