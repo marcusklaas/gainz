@@ -20,11 +20,19 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      # node-version is a different question from the action's own runtime: it
+      # is what the code is tested on. 24 because that is what it is developed
+      # on, and a gate that runs an older Node than the machine writing the code
+      # is checking the wrong thing — it passes what is about to break and fails
+      # what already works.
+      #
+      # `cache` is set explicitly, so the automatic package-manager detection
+      # added in setup-node v5 has nothing left to decide.
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - run: npm ci

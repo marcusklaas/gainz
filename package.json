@@ -5,7 +5,7 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
-    "test": "tsc -p tsconfig.test.json && node --test 'test-build/test/*.test.js'",
+    "test": "tsc -p tsconfig.test.json && node --test \"test-build/test/*.test.js\"",
     "serve": "node serve.mjs",
     "icons": "node tools/icons.mjs"
   },
