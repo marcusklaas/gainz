@@ -451,6 +451,12 @@ li button { border: 0; background: none; padding: 0 .25rem; }
   cursor: pointer;
   list-style: none;
 }
+/* The leading fold is trimmed the way leading headings are: its .75rem is space
+   between folds, and on the first one there is nothing above to be spaced from.
+   Load-bearing on desktop, where a fold that opened .75rem low would be the
+   deepest baseline in the row and drag the whole sidebar down to meet it — so
+   the one thing meant to hold still between tabs would move on this one. */
+#settings form > details:first-child > summary { padding-top: 0; }
 #settings summary::-webkit-details-marker { display: none; }
 #settings summary h2 { margin: 0; flex: 1; }
 #settings summary::after {
@@ -572,11 +578,21 @@ li button { border: 0; background: none; padding: 0 .25rem; }
      UA rule of the lowest possible specificity, so the id selector below would
      quietly beat it and show the app behind the setup screen. */
   #app[hidden] { display: none; }
+  /* Baseline, not start. Aligning the tops lines up two *boxes*, and a box top
+     is not what the eye reads — it reads the row of text, which sits wherever
+     that box's padding and font leave it. So Trend's bare "Weight" and Today's
+     bordered ‹ button both started level and neither looked level with "Today"
+     in the sidebar. Grid baseline alignment lines up the first text baseline of
+     each item instead, and nav's first baseline is the Today button's, so the
+     tab you are on and the line beside it sit on one line.
+     This is why the margin-trimming above is load-bearing: a leading margin now
+     drags the section's first baseline down, and the deepest baseline in the row
+     is the one everything else moves to meet. */
   #app {
     display: grid;
     grid-template-columns: var(--side) 1fr;
     gap: 0 var(--gap);
-    align-items: start;
+    align-items: baseline;
   }
 
   /* Back into the flow, in the first column, and following the page down. */

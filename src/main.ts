@@ -437,8 +437,9 @@ function renderStrength(s: Strength | null): void {
     return;
   }
 
-  note.textContent =
-    `Strength ${pct(fitTotal(fit))} ${plusMinus(fit)} over ${fit.windowDays} days`;
+  // No "Strength" prefix — the section heading already said it, and the arrow
+  // carries the direction on its own.
+  note.textContent = `${pct(fitTotal(fit))} ${plusMinus(fit)} over ${fit.windowDays} days`;
 
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   from.textContent = `from ${plural(fit.points, "exercise-session")} across ${plural(fit.exercises, "exercise")}`;
