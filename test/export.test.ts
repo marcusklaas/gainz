@@ -327,9 +327,12 @@ describe("preamble", () => {
     assert.ok(doc.includes("1.8 g per kg"));
   });
 
-  it("says where things stand today, with the interval attached", () => {
+  it("says where things stand today", () => {
     const doc = build(history(60, { kcal: 2200, goal: 2200 }));
-    assert.ok(/Smoothed weight \d+\.\d kg, moving [-+]\d+\.\d\d ± \d+\.\d\d kg\/week/.test(doc), doc.slice(doc.indexOf("## Where")));
+    assert.ok(
+      /Smoothed weight \d+\.\d kg, moving [-+]\d+\.\d\d kg\/week/.test(doc),
+      doc.slice(doc.indexOf("## Where")),
+    );
     assert.ok(/TDEE \d+ kcal/.test(doc));
   });
 });

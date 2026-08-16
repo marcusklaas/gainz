@@ -16,9 +16,11 @@ export interface Sample {
   kg: number;
 }
 
-export interface Trend {
-  kgPerWeek: number;
-  stdErrKgPerWeek: number;
+/** A smoothed point: the level, and the slope the smoother was carrying when it
+ *  reached it. */
+export interface HoltPoint extends Sample {
+  /** kg/day. */
+  slope: number;
 }
 
 export const dayKcal = (d: Day): number => d.items.reduce((n, i) => n + i.kcal, 0);
@@ -36,15 +38,20 @@ export function weightSamples(days: Map<DayKey, Day>): Sample[] {
  *
  * A plain EWMA estimates level only, which puts its weights at a mean age of
  * (1-a)/a — about 14 days at a 10-day half-life. That is the visible lag. Holt
- * removes it without needing future data, and is the discrete cousin of the
- * local-linear-trend Kalman model planned for M4.
+ * removes it without needing future data.
+ *
+ * Both outputs are used: the level is the smoothed weight on the chart and the
+ * input to Mifflin-St Jeor, and the slope is what TDEE is derived from. They
+ * come from the same recursion, so the rate shown is the tangent to the curve
+ * drawn — a windowed fit alongside it could report a rate the drawn line
+ * visibly disagrees with.
  */
 export function holtSeries(
   samples: Sample[],
   levelHalfLifeDays: number,
   trendHalfLifeDays: number,
-): Sample[] {
-  const out: Sample[] = [];
+): HoltPoint[] {
+  const out: HoltPoint[] = [];
   let level = 0;
   let slope = 0; // kg/day
 
@@ -52,7 +59,7 @@ export function holtSeries(
     const last = out[out.length - 1];
     if (!last) {
       level = s.kg;
-      out.push({ day: s.day, kg: level });
+      out.push({ day: s.day, kg: level, slope });
       continue;
     }
     const gap = Math.max(daysBetween(last.day, s.day), 1);
@@ -62,43 +69,9 @@ export function holtSeries(
     const previous = level;
     level = a * s.kg + (1 - a) * (level + slope * gap);
     slope = b * ((level - previous) / gap) + (1 - b) * slope;
-    out.push({ day: s.day, kg: level });
+    out.push({ day: s.day, kg: level, slope });
   }
   return out;
-}
-
-/**
- * OLS of kg against elapsed days. Preferred over differencing the EWMA: lower
- * variance, no lag, gaps need no handling, and it yields a standard error.
- */
-export function regress(samples: Sample[]): Trend | null {
-  const n = samples.length;
-  if (n < 3) return null;
-
-  const origin = samples[0]!.day;
-  const x = samples.map((s) => daysBetween(origin, s.day));
-  const y = samples.map((s) => s.kg);
-  const mx = x.reduce((a, b) => a + b, 0) / n;
-  const my = y.reduce((a, b) => a + b, 0) / n;
-
-  let sxx = 0;
-  let sxy = 0;
-  for (let i = 0; i < n; i++) {
-    sxx += (x[i]! - mx) ** 2;
-    sxy += (x[i]! - mx) * (y[i]! - my);
-  }
-  if (sxx === 0) return null; // every sample on the same day
-
-  const slope = sxy / sxx; // kg/day
-  const intercept = my - slope * mx;
-
-  let sse = 0;
-  for (let i = 0; i < n; i++) sse += (y[i]! - (intercept + slope * x[i]!)) ** 2;
-
-  return {
-    kgPerWeek: slope * DAYS_PER_WEEK,
-    stdErrKgPerWeek: Math.sqrt(sse / (n - 2) / sxx) * DAYS_PER_WEEK,
-  };
 }
 
 export function mifflinBmr(bio: Config["bio"], kg: number, on: DayKey): number {
@@ -170,12 +143,16 @@ interface Counted {
 export interface Estimate {
   samples: Sample[];
   /** Smoothed weight, one point per weigh-in. */
-  trendLine: Sample[];
+  trendLine: HoltPoint[];
   trendKg: number;
-  trend: Trend | null;
+  /** The smoother's current slope, or null below the two weigh-ins it takes to
+   *  have a rate at all. Null rather than zero so "flat" and "unknown" stay
+   *  distinguishable, which is the one thing every caller branches on. */
+  kgPerWeek: number | null;
   tdee: number;
-  tdeeStdErr: number | null;
   countedDays: number;
+  /** How far back intake is averaged. No longer bounds the weight trend, which
+   *  the smoother carries over the whole history. */
   windowDays: number;
   /** The band as displayed: the corrected target, half the window either side. */
   kcalLower: number;
@@ -285,11 +262,11 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
   const e = cfg.estimator;
   const samples = weightSamples(days);
   const trendLine = holtSeries(samples, e.levelHalfLifeDays, e.trendHalfLifeDays);
-  const trendKg = trendLine[trendLine.length - 1]?.kg;
-  if (trendKg === undefined) return null;
+  const last = trendLine[trendLine.length - 1];
+  if (last === undefined) return null;
+  const trendKg = last.kg;
 
   const from = addDays(today, -e.tdeeWindowDays);
-  const trend = regress(samples.filter((s) => s.day >= from));
   const bmr = mifflinBmr(cfg.bio, trendKg, today);
   const formulaTdee = bmr * e.activityFactor;
 
@@ -313,10 +290,7 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
   const avgIntake = inWindow.length
     ? inWindow.reduce((a, c) => a + c.kcal, 0) / inWindow.length
     : null;
-  const measuredTdee =
-    avgIntake !== null && trend
-      ? avgIntake - (trend.kgPerWeek * KCAL_PER_KG_FAT) / DAYS_PER_WEEK
-      : null;
+  const measuredTdee = avgIntake === null ? null : avgIntake - last.slope * KCAL_PER_KG_FAT;
 
   // Blend toward the measured value as logged days accumulate. Covers the cold
   // start, vacations, and any stretch of poor logging.
@@ -335,10 +309,8 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
     samples,
     trendLine,
     trendKg,
-    trend,
+    kgPerWeek: samples.length < 2 ? null : last.slope * DAYS_PER_WEEK,
     tdee,
-    tdeeStdErr:
-      trend && w > 0 ? (w * trend.stdErrKgPerWeek * KCAL_PER_KG_FAT) / DAYS_PER_WEEK : null,
     countedDays: inWindow.length,
     windowDays: e.tdeeWindowDays,
     kcalLower: targetKcal - half,
