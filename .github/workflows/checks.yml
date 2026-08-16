@@ -20,9 +20,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      # node-version is what the code is tested on and is unrelated to the
+      # action's own runtime — 22 is deliberate and stays. `cache` is set
+      # explicitly, so the automatic package-manager detection added in v5 has
+      # nothing left to decide.
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
