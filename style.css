@@ -220,12 +220,11 @@ h3 span {
 #stats { margin: 1.25rem 0; }
 
 /* uPlot draws axes and grid from JS options (see chart.ts theme()); these rules
-   cover the parts it renders as DOM. Everything else here is .chart, shared by
-   both charts on Trend — but only the weight one pans, and touch-action is what
-   trades a finger drag over it for scrolling the page. Over the strength chart
-   there is nothing to drag, so the page must keep the gesture. */
-#chart .u-over { touch-action: none; cursor: grab; }
-#chart .u-over:active { cursor: grabbing; }
+   cover the parts it renders as DOM. Everything here is .chart, shared by both
+   charts on Trend: both pan and zoom the same way, and touch-action is what
+   trades a finger drag over either of them for scrolling the page. */
+.chart .u-over { touch-action: none; cursor: grab; }
+.chart .u-over:active { cursor: grabbing; }
 
 /* uPlot sizes its root to min-content, which lets the legend widen the whole
    chart. Pinning it to the container keeps both to the same width. */
@@ -257,6 +256,10 @@ h3 span {
   min-width: 0;
   margin: 0;
 }
+/* A series uPlot draws but the readout does not report — the weight chart's
+   projection. uPlot builds one legend row per series with no way to opt out, so
+   the row is dropped here; chart.ts marks the series with the class. */
+.chart .u-legend tr.unlisted { display: none; }
 /* The numeric pairs hold their size unconditionally. Left shrinkable they would
    be squeezed along with the date on a narrow screen, which is the one thing
    the fixed widths below exist to prevent. */
@@ -286,8 +289,8 @@ h3 span {
 
 /* "70.05 kg", the longest the trend can read at a plausible bodyweight. */
 #chart .u-legend tr:not(:first-child) .u-value { width: 8.5ch; }
-/* The index is rebased to 100 at the left edge, and ten weeks of novice
-   progress already reads 248 — so four digits and a decimal, which is a
+/* The index is rebased to 100 at the first session on record, and ten weeks of
+   novice progress already reads 248 — so four digits and a decimal, which is a
    fifty-fold gain and will not be reached. */
 #strength-chart .u-legend tr:not(:first-child) .u-value { width: 6.5ch; }
 
