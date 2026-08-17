@@ -166,14 +166,16 @@ let chartModule: Promise<typeof import("./chart.js")> | null = null;
  */
 async function paintChart(): Promise<void> {
   const { drawStrength, drawTrend } = await (chartModule ??= import("./chart.js"));
-  // The view opens on exactly what the headline is built from: the days of
-  // intake the TDEE fit averaged, and the week the slope says comes next.
-  const e = cachedConfig()?.estimator;
+  // Both views open on exactly what the headline under them is built from: for
+  // weight, the days of intake the TDEE fit averaged plus the week the slope
+  // says comes next; for strength, the window the panel fit is computed over.
+  const cfg = cachedConfig();
+  const e = cfg?.estimator;
   drawTrend($("chart"), latest?.samples ?? [], latest?.trendLine ?? [], {
     historyDays: e?.tdeeWindowDays ?? 21,
     projectionDays: e?.projectionDays ?? 0,
   });
-  drawStrength($("strength-chart"), latestStrength?.index ?? []);
+  drawStrength($("strength-chart"), latestStrength?.index ?? [], cfg?.strength.windowDays ?? 42);
 }
 
 function show(name: Screen): void {
