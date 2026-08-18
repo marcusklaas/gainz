@@ -43,7 +43,22 @@
   <section id="today">
     <header>
       <button id="prev-day" title="Previous day">&lsaquo;</button>
-      <h2 id="day-label"></h2>
+      <!-- The lock sits inside the heading rather than beside it, so the label
+           and the padlock centre as one unit and the two arrows stay symmetric.
+           Hidden outright on today, which is the only shape most visits see. -->
+      <h2>
+        <span id="day-label"></span>
+        <button id="day-lock" type="button" hidden aria-pressed="false">
+          <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
+            <rect x="2.5" y="6.5" width="9" height="6" rx="1.25"></rect>
+            <!-- Two shackles, one shown per state: the right leg drops into the
+                 body when locked and stands clear of it when open. The state is
+                 the shape, not just the colour. -->
+            <path class="shut" d="M4.5 6.5V4.25a2.5 2.5 0 0 1 5 0V6.5"></path>
+            <path class="open" d="M4.5 6.5V4.25a2.5 2.5 0 0 1 5 0"></path>
+          </svg>
+        </button>
+      </h2>
       <button id="next-day" title="Next day">&rsaquo;</button>
     </header>
 
@@ -61,43 +76,49 @@
 
     <p id="stats" class="note"></p>
 
-    <!-- Units live beside the box, not in its placeholder: a placeholder is gone
-         exactly when the field has a number in it, which is when the unit is
-         worth reading. Each pairs with its input inside a .field so the two
-         cannot be separated when the row wraps on a narrow screen. -->
-    <form id="weight-form">
-      <span class="field">
-        <input id="f-weight" type="number" step="0.1" min="30" max="250" aria-label="Weight in kilograms">
-        <span class="unit">kg</span>
-      </span>
-      <button>Save weight</button>
-    </form>
-
-    <form id="food-form">
-      <textarea id="f-desc" rows="3" required
-        placeholder="thick toast with oyster mushroom, salad and a bit of sauce"></textarea>
-      <div id="food-row">
+    <!-- Everything that writes to the day, gathered under one fieldset: a past
+         day is made read-only by a single `disabled` rather than by naming eight
+         controls, and the delete buttons renderItems() builds inside #items are
+         covered without it having to know the lock exists. -->
+    <fieldset id="day-edit">
+      <!-- Units live beside the box, not in its placeholder: a placeholder is gone
+           exactly when the field has a number in it, which is when the unit is
+           worth reading. Each pairs with its input inside a .field so the two
+           cannot be separated when the row wraps on a narrow screen. -->
+      <form id="weight-form">
         <span class="field">
-          <input id="f-kcal" type="number" min="0" required aria-label="Calories">
-          <span class="unit">kcal</span>
+          <input id="f-weight" type="number" step="0.1" min="30" max="250" aria-label="Weight in kilograms">
+          <span class="unit">kg</span>
         </span>
-        <span class="field">
-          <input id="f-protein" type="number" min="0" step="0.1" required aria-label="Protein in grams">
-          <span class="unit">g protein</span>
-        </span>
-        <button id="f-estimate" type="button">Estimate</button>
-        <button id="f-add">Add</button>
-      </div>
-    </form>
-    <p id="food-msg" class="msg"></p>
+        <button>Save weight</button>
+      </form>
 
-    <ul id="items"></ul>
+      <form id="food-form">
+        <textarea id="f-desc" rows="3" required
+          placeholder="thick toast with oyster mushroom, salad and a bit of sauce"></textarea>
+        <div id="food-row">
+          <span class="field">
+            <input id="f-kcal" type="number" min="0" required aria-label="Calories">
+            <span class="unit">kcal</span>
+          </span>
+          <span class="field">
+            <input id="f-protein" type="number" min="0" step="0.1" required aria-label="Protein in grams">
+            <span class="unit">g protein</span>
+          </span>
+          <button id="f-estimate" type="button">Estimate</button>
+          <button id="f-add">Add</button>
+        </div>
+      </form>
+      <p id="food-msg" class="msg"></p>
 
-    <label class="check">
-      <input id="f-logging" type="checkbox">
-      <span>Everything logged — count this day</span>
-    </label>
-    <p class="note">Days left unticked are ignored by the TDEE and goal maths.</p>
+      <ul id="items"></ul>
+
+      <label class="check">
+        <input id="f-logging" type="checkbox">
+        <span>Everything logged — count this day</span>
+      </label>
+      <p class="note">Days left unticked are ignored by the TDEE and goal maths.</p>
+    </fieldset>
   </section>
 
   <!-- No day scroller here, unlike Today. Food is a daily obligation and every

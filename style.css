@@ -111,7 +111,48 @@ nav button[aria-current="true"] {
   align-items: center;
   gap: .5rem;
 }
-#today header h2 { flex: 1; text-align: center; margin: 0; }
+#today header h2 {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: .4rem;
+  margin: 0;
+}
+
+/* Bare, unlike the arrows either side of it: a bordered box next to the title
+   reads as a third navigation button, which is the bulk this is avoiding. The
+   padding is the tap target and the only reason it is not simply the glyph. */
+#day-lock {
+  padding: .25rem;
+  border: 0;
+  background: none;
+  line-height: 0;
+  color: var(--dim);
+}
+#day-lock svg { fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; }
+#day-lock .open { display: none; }
+
+/* Armed. Amber rather than green: this is a state to notice and leave, not a
+   thing done correctly. */
+#day-lock[aria-pressed="true"] { color: var(--warn); }
+#day-lock[aria-pressed="true"] .shut { display: none; }
+#day-lock[aria-pressed="true"] .open { display: inline; }
+
+/* A grouping element and nothing else — the browser's own border and padding
+   would draw a box around half the screen. */
+#day-edit { margin: 0; padding: 0; border: 0; min-width: 0; }
+
+/* A fieldset establishes a block formatting context, so the first form's top
+   margin no longer collapses into the note above it and everything below moved
+   down. Dropping it restores the spacing exactly: the wrapper is here to group
+   controls, and it may not cost the layout a pixel. */
+#day-edit > :first-child { margin-top: 0; }
+
+/* The dimming is the whole "you are in the past" cue, so there is no separate
+   banner or tint: the region that cannot be typed into is visibly the region
+   that cannot be typed into. */
+#day-edit[disabled] { opacity: .55; }
 
 label {
   display: block;
