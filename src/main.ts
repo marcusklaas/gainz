@@ -1,4 +1,5 @@
 import { at, defaultConfig, FIELDS, put, withDefaults } from "./config.js";
+import { installDatalistFallback } from "./datalist.js";
 import { addDays, atTime, byAt, humanDay, monthOf, nowStamp, todayKey } from "./dates.js";
 import {
   dayKcal,
@@ -1357,5 +1358,9 @@ addEventListener("visibilitychange", () => {
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js", { type: "module" }).catch(() => {});
 }
+
+// Nothing on the browsers that draw their own <datalist> popup, which is all of
+// them but one — see src/datalist.ts.
+installDatalistFallback();
 
 void boot();

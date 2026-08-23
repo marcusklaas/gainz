@@ -477,6 +477,39 @@ li button { border: 0; background: none; padding: 0 .25rem; }
 #l-add-form { display: flex; gap: .4rem; }
 #l-add-form input { flex: 1; min-width: 0; }
 
+/* The stand-in for the popup Firefox on Android does not draw — see
+   src/datalist.ts, which is the only thing that ever creates this element. It
+   is styled as the field it drops out of rather than as a menu: same fill, same
+   border, joined to the input by the shared edge, so the two read as one
+   control the way a native one does. Nothing here is loaded on any other
+   browser, because nothing there ever builds the list. */
+.datalist-fallback {
+  position: absolute;
+  z-index: 30;
+  margin: -1px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 15rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: #1f2229;
+  border: 1px solid var(--line);
+  border-radius: 0 0 4px 4px;
+}
+.datalist-fallback li {
+  padding: .45rem .6rem;
+  cursor: pointer;
+  /* A phone taps this; a long name should not silently become another one. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.datalist-fallback li + li { border-top: 1px solid var(--line); }
+/* Feedback under the finger, for the moment between touching a suggestion and
+   the list closing on it. There is no hover state to pair it with: the only
+   pointer that reaches this is a finger. */
+.datalist-fallback li:active { color: var(--bg); background: var(--fg); }
+
 #lift-actions { display: flex; gap: .4rem; margin-top: 1.5rem; }
 #l-save { flex: 1; color: var(--fg); border-color: var(--fg); }
 #l-save:disabled { color: var(--dim); border-color: var(--line); cursor: default; }
