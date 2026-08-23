@@ -152,13 +152,15 @@ function accumulate(counted: Counted[], e: Config["estimator"]): Bias {
 }
 
 /**
- * The goal shifted against the accumulated bias, damped by the gain and clamped
- * so the band moves by at most its own half-width. The floor is basal metabolic
- * rate — a real physiological line rather than a picked number, and no
- * correction has any business pushing a target below it.
+ * The goal shifted against the accumulated bias, damped by the gain. How far the
+ * shift can reach is set by the gain and biasMaxKcal alone — the band width no
+ * longer bounds it, so a long enough run of overshooting can move the target
+ * clear of the original band. The floor is basal metabolic rate — a real
+ * physiological line rather than a picked number, and no correction has any
+ * business pushing a target below it.
  */
-function correctedTarget(goal: number, half: number, bias: number, bmr: number, gain: number) {
-  return Math.max(goal - clamp(gain * bias, half), bmr);
+function correctedTarget(goal: number, bias: number, bmr: number, gain: number) {
+  return Math.max(goal - gain * bias, bmr);
 }
 
 interface Counted {
@@ -331,7 +333,7 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
   const goalKcal = tdee + cfg.goal.kcalOffset;
   const half = cfg.goal.kcalWindow / 2;
   const bias = accumulate(counted, e);
-  const targetKcal = correctedTarget(goalKcal, half, bias.kcal, bmr, e.biasGain);
+  const targetKcal = correctedTarget(goalKcal, bias.kcal, bmr, e.biasGain);
 
   return {
     samples,
