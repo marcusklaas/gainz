@@ -579,11 +579,21 @@ describe("estimate", () => {
       close(e.bias.kcal, 900, 1e-9);
     });
 
-    it("moves the band by at most its own half-width", () => {
-      const cfg = config({ biasGain: 5, biasMaxKcal: 5000 }, { kcalWindow: 400 });
-      const days = history(60, () => ({ ...logged(6000, 2000), weight_kg: 80 }));
+    it("moves the band as far as gain and cap allow, past its own width", () => {
+      // The band width no longer bounds the correction: with a big enough gain
+      // the shifted band clears the original one entirely.
+      const cfg = config({ biasGain: 1, biasMaxKcal: 900 }, { kcalWindow: 400 });
+      const days = history(60, () => ({ ...logged(3400, 2400), weight_kg: 80 }));
       const e = estimate(cfg, days, today)!;
-      close(e.goalKcal - e.targetKcal, 200, 1e-9);
+      close(e.goalKcal - e.targetKcal, e.bias.kcal, 1e-9);
+      assert.ok(e.goalKcal - e.targetKcal > 200, "no longer clamped to the half-width");
+    });
+
+    it("shifts by exactly gain times the bias when the floor is far away", () => {
+      const cfg = config({ biasGain: 0.3, biasMaxKcal: 900 });
+      const days = history(60, () => ({ ...logged(3400, 2400), weight_kg: 80 }));
+      const e = estimate(cfg, days, today)!;
+      close(e.goalKcal - e.targetKcal, 0.3 * e.bias.kcal, 1e-9);
     });
 
     it("never pushes the target below basal metabolic rate", () => {
