@@ -5,7 +5,7 @@
   //
   // Only `test` is included. tsc follows the imports from there, so the
   // estimator modules get compiled as a side effect and nothing else does —
-  // the DOM-facing half of src/ is type-checked by `npm run build`, which is
+  // the DOM-facing half of src/ is type-checked by `bun run build`, which is
   // the job that actually has to produce it.
   "extends": "./tsconfig.json",
   "compilerOptions": {

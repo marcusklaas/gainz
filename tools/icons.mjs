@@ -1,4 +1,4 @@
-// Generates the app icons and the favicon. Run with `npm run icons` after
+// Generates the app icons and the favicon. Run with `bun run icons` after
 // changing the artwork or the palette in style.css; everything it writes into
 // icons/ is committed.
 //
