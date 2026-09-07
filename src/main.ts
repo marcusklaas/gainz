@@ -1,4 +1,5 @@
 import { at, defaultConfig, FIELDS, put, withDefaults } from "./config.js";
+import { installDatalistFallback } from "./datalist.js";
 import { addDays, atTime, byAt, humanDay, monthOf, nowStamp, todayKey } from "./dates.js";
 import {
   dayKcal,
@@ -86,6 +87,40 @@ function flash(id: string, text: string, kind: "ok" | "err" = "ok"): void {
 
 let day = todayKey();
 
+// ------------------------------------------------------------- the day lock
+//
+// Past days arrive read-only. Browsing back a few days to check something is a
+// tap away and the screen is otherwise identical to today's, so the write
+// surface being live is an invitation to log this evening's dinner onto a
+// Tuesday in July — where it is not just wrong but load-bearing, since the
+// estimator reads those days back as intake and moves every following target.
+//
+// The lock is off today always, so the common case never meets it at all.
+
+/**
+ * Whether the past day on screen has been armed. In memory and nowhere else:
+ * not localStorage, not the outbox, not the day file. A reload, a new tab or a
+ * fresh boot all start locked, because an unlock is a statement about the next
+ * minute rather than a setting.
+ */
+let unlocked = false;
+
+/** Today is never locked; every other day is, until the padlock is tapped. */
+const locked = (): boolean => day !== todayKey() && !unlocked;
+
+/**
+ * The only way the day on screen changes. Navigating always re-locks — stepping
+ * off an armed day and back onto it lands on it locked, the same as arriving
+ * from anywhere else — and routing both arrows through here is what makes that
+ * true of any way in that gets added later, rather than a rule each caller has
+ * to remember.
+ */
+function goTo(next: DayKey): void {
+  day = next;
+  unlocked = false;
+  void render();
+}
+
 // ------------------------------------------------------------------- boot
 
 /**
@@ -166,14 +201,16 @@ let chartModule: Promise<typeof import("./chart.js")> | null = null;
  */
 async function paintChart(): Promise<void> {
   const { drawStrength, drawTrend } = await (chartModule ??= import("./chart.js"));
-  // The view opens on exactly what the headline is built from: the days of
-  // intake the TDEE fit averaged, and the week the slope says comes next.
-  const e = cachedConfig()?.estimator;
+  // Both views open on exactly what the headline under them is built from: for
+  // weight, the days of intake the TDEE fit averaged plus the week the slope
+  // says comes next; for strength, the window the panel fit is computed over.
+  const cfg = cachedConfig();
+  const e = cfg?.estimator;
   drawTrend($("chart"), latest?.samples ?? [], latest?.trendLine ?? [], {
     historyDays: e?.tdeeWindowDays ?? 21,
     projectionDays: e?.projectionDays ?? 0,
   });
-  drawStrength($("strength-chart"), latestStrength?.index ?? []);
+  drawStrength($("strength-chart"), latestStrength?.index ?? [], cfg?.strength.windowDays ?? 42);
 }
 
 function show(name: Screen): void {
@@ -182,6 +219,9 @@ function show(name: Screen): void {
   // there is no route out that forgets. A session in progress is untouched:
   // its whole contract is that it survives this.
   if (name !== "lift") edit = null;
+  // Same reasoning one screen over: leaving Today ends an unlock, so coming
+  // back to a past day lands on it locked rather than still armed from before.
+  if (name !== "today") unlocked = false;
   for (const s of SCREENS) $(s).hidden = s !== name;
   // The editor is part of Lifts as far as the nav is concerned; nothing else
   // would be lit while it is open.
@@ -195,6 +235,11 @@ function show(name: Screen): void {
   // no weigh-ins still has a strength index to draw.
   if (name === "trend") void paintChart();
   if (name === "lifts") void renderLifts();
+  // Repaints the lock that arriving here just reset. Without this the fields
+  // stay looking editable while commit() has already started refusing them,
+  // which is the one failure mode worse than the lock itself: typing a meal in
+  // and having Add do nothing at all.
+  if (name === "today") renderLock();
 }
 
 for (const b of document.querySelectorAll<HTMLButtonElement>("nav button")) {
@@ -220,6 +265,10 @@ async function sync(): Promise<void> {
  * that order, and the push last because it is the only step allowed to fail.
  */
 async function commit(fn: (d: Day) => void): Promise<void> {
+  // The controls are disabled as well, so this is the backstop rather than the
+  // mechanism: it is what makes "a locked day is not written to" a property of
+  // the funnel every write already goes through, and not of eight handlers.
+  if (locked()) return;
   await updateDay(day, fn);
   await render();
   await sync();
@@ -251,15 +300,18 @@ $("setup-form").addEventListener("submit", async (e) => {
 
 // -------------------------------------------------------------------- today
 
-$("prev-day").addEventListener("click", () => {
-  day = addDays(day, -1);
-  void render();
-});
+$("prev-day").addEventListener("click", () => goTo(addDays(day, -1)));
 
 $("next-day").addEventListener("click", () => {
   if (day === todayKey()) return;
-  day = addDays(day, 1);
-  void render();
+  goTo(addDays(day, 1));
+});
+
+// Toggles both ways, so a day can be deliberately put back down once it is
+// dealt with rather than only by walking away from it.
+$("day-lock").addEventListener("click", () => {
+  unlocked = !unlocked;
+  renderLock();
 });
 
 $("weight-form").addEventListener("submit", async (e) => {
@@ -345,6 +397,19 @@ $("f-logging").addEventListener("change", async () => {
   });
 });
 
+/**
+ * The padlock and the fields it governs — the whole of the lock on screen.
+ * There is no banner and no tint beyond this: the region that cannot be typed
+ * into is dimmed, which says where you are by saying what you cannot do.
+ */
+function renderLock(): void {
+  const lock = $<HTMLButtonElement>("day-lock");
+  lock.hidden = day === todayKey();
+  lock.setAttribute("aria-pressed", String(unlocked));
+  lock.title = unlocked ? "Lock this day" : "Unlock to edit this day";
+  $<HTMLFieldSetElement>("day-edit").disabled = locked();
+}
+
 /** Detached from render(), so a failure here cannot surface as an unhandled rejection. */
 async function planReminders(cfg: Config | null, d: Day, src: Source): Promise<void> {
   try {
@@ -371,6 +436,7 @@ async function render(src: Source = "server"): Promise<void> {
 
   const d = await readDay(day, src);
   $("day-label").textContent = humanDay(day);
+  renderLock();
   $<HTMLButtonElement>("next-day").disabled = day === todayKey();
   $<HTMLInputElement>("f-weight").value = d.weight_kg ? String(d.weight_kg) : "";
   $<HTMLInputElement>("f-logging").checked = d.logging === "complete";
@@ -1292,5 +1358,9 @@ addEventListener("visibilitychange", () => {
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js", { type: "module" }).catch(() => {});
 }
+
+// Nothing on the browsers that draw their own <datalist> popup, which is all of
+// them but one — see src/datalist.ts.
+installDatalistFallback();
 
 void boot();

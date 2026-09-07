@@ -30,6 +30,12 @@ const FALLBACK_SPAN_DAYS = 21;
 /** Local midnight as unix seconds — uPlot's native x unit. */
 const toX = (s: { day: string }) => parseDay(s.day).getTime() / 1000;
 
+/** A stretch of the x axis, in the unix seconds uPlot ranges over. */
+interface Extent {
+  min: number;
+  max: number;
+}
+
 /** What the default view spans, in days either side of the last weigh-in. */
 export interface Span {
   /** History, back from the last weigh-in. */
@@ -40,7 +46,7 @@ export interface Span {
 
 let plot: uPlot | null = null;
 /** Full extent including the projection, so pan/zoom can be clamped to it. */
-let bounds = { min: 0, max: 0 };
+let bounds: Extent = { min: 0, max: 0 };
 /** Seconds of `bounds` that are projected rather than measured. */
 let projected = 0;
 /** Seconds of history the default view opens on. */
@@ -63,7 +69,7 @@ let history = FALLBACK_SPAN_DAYS * DAY_SECONDS;
  *
  * Everything outside is still there. Zoom or pan out to reach it.
  */
-function defaultView(): { min: number; max: number } {
+function defaultView(): Extent {
   return {
     min: Math.max(bounds.max - projected - history, bounds.min),
     max: bounds.max,
@@ -73,8 +79,12 @@ function defaultView(): { min: number; max: number } {
 /**
  * Wheel and pinch to zoom, drag to pan, double-click to reset. Replaces uPlot's
  * built-in drag-to-zoom, since drag is far more useful as scroll on a phone.
+ *
+ * Both charts on Trend use it, so what it may reach and where it returns to are
+ * read through callbacks rather than closed over: the extents belong to whichever
+ * chart installed the plugin, and they change on every redraw.
  */
-function panZoom(): uPlot.Plugin {
+function panZoom(limits: () => Extent, home: () => Extent): uPlot.Plugin {
   return {
     hooks: {
       ready(u: uPlot) {
@@ -82,6 +92,7 @@ function panZoom(): uPlot.Plugin {
 
         /** Keeps the view inside the data and never narrower than a day. */
         const clamp = (min: number, max: number) => {
+          const bounds = limits();
           const span = Math.min(Math.max(max - min, DAY_SECONDS), bounds.max - bounds.min);
           if (min < bounds.min) return { min: bounds.min, max: bounds.min + span };
           if (max > bounds.max) return { min: bounds.max - span, max: bounds.max };
@@ -161,7 +172,7 @@ function panZoom(): uPlot.Plugin {
         over.addEventListener("pointerup", release);
         over.addEventListener("pointercancel", release);
 
-        over.addEventListener("dblclick", () => u.setScale("x", defaultView()));
+        over.addEventListener("dblclick", () => u.setScale("x", home()));
       },
     },
   };
@@ -229,6 +240,13 @@ function options(width: number): uPlot.Options {
         // second quantity. Thinner too: a forecast should not draw the eye
         // harder than the measurement it is drawn from.
         label: "projected",
+        // Drawn, but kept out of the readout — for the same reason it is not
+        // given its own colour. A fourth label-and-value pair crowds the row off
+        // a phone, and it would be a fourth pair reporting no fourth quantity.
+        // The readout stays the three it was before the projection existed, and
+        // the dashes speak for themselves. See .u-legend tr.unlisted in
+        // style.css, which is what the class is for.
+        class: "unlisted",
         stroke: c.ok,
         width: 1.5,
         dash: [3, 4],
@@ -236,7 +254,7 @@ function options(width: number): uPlot.Options {
         value: (_u, v) => (v == null ? "—" : `${v.toFixed(2)} kg`),
       },
     ],
-    plugins: [panZoom()],
+    plugins: [panZoom(() => bounds, defaultView)],
   };
 }
 
@@ -308,6 +326,25 @@ export function drawTrend(el: HTMLElement, samples: Sample[], trend: HoltPoint[]
 // x axis and nothing else, and a second y axis on one picture would invite
 // exactly the point-to-point reading both are built to avoid.
 
+let strengthPlot: uPlot | null = null;
+/** Full data extent, so pan/zoom can be clamped to it. */
+let strengthBounds: Extent = { min: 0, max: 0 };
+/** Seconds of history the default view opens on, set on every draw — always
+ *  before the plot that reads it through the plugin exists. */
+let strengthWindow = 0;
+
+/**
+ * The window the fit is computed over, back from the last session — so the
+ * picture opens on the same stretch the verdict below it is about. Everything
+ * older is still there; pan or zoom out to reach it.
+ */
+function strengthDefaultView(): Extent {
+  return {
+    min: Math.max(strengthBounds.max - strengthWindow, strengthBounds.min),
+    max: strengthBounds.max,
+  };
+}
+
 /** Shared with the weight chart above; only the series differ. */
 function strengthOptions(width: number): uPlot.Options {
   const c = theme();
@@ -352,19 +389,23 @@ function strengthOptions(width: number): uPlot.Options {
         value: (_u, v) => (v == null ? "—" : v.toFixed(1)),
       },
     ],
+    plugins: [panZoom(() => strengthBounds, strengthDefaultView)],
   };
 }
 
-let strengthPlot: uPlot | null = null;
-
 /**
- * The index, rebased so its left edge reads 100.
+ * The index, rebased so the first session on record reads 100, opening on the
+ * window the fit below it is computed over.
  *
- * No pan or zoom, deliberately, and the one place the two charts differ. The
- * index has no absolute level — it is defined only up to an additive constant —
- * so the number on the axis only means anything relative to the left edge of
- * the picture. Panning would slide that baseline out from under the reader
- * while the numbers stayed put, which is worse than not panning at all.
+ * Pans and zooms like the weight chart, which it did not used to: the objection
+ * was that the index has no absolute level — it is defined only up to an
+ * additive constant — so a baseline that meant "the left edge of the picture"
+ * would slide out from under the reader on the first drag. The fix is to stop
+ * the baseline moving rather than to stop the reader: it is pinned to the start
+ * of the loaded history, so every number on the axis means the same thing at
+ * every pan and zoom, and the default view no longer has to be the whole extent
+ * to keep it honest. What the axis costs is that its left edge rarely reads 100
+ * any more, which was never the point of the picture.
  *
  * The index alone, with no fitted line over it. The line was drawn once and
  * looked at: over six weeks the fit reads +44% where the index's own endpoints
@@ -373,7 +414,7 @@ let strengthPlot: uPlot | null = null;
  * daylight between a line and the points it is drawn through reads as a bug
  * rather than as information. The headline carries the fit in words instead.
  */
-export function drawStrength(el: HTMLElement, index: IndexPoint[]): void {
+export function drawStrength(el: HTMLElement, index: IndexPoint[], windowDays: number): void {
   if (index.length < 2) {
     strengthPlot?.destroy();
     strengthPlot = null;
@@ -387,17 +428,24 @@ export function drawStrength(el: HTMLElement, index: IndexPoint[]): void {
     index.map((p) => 100 * Math.exp(p.x - base)),
   ];
 
+  const xs = data[0];
+  strengthBounds = { min: xs[0]!, max: xs[xs.length - 1]! };
+  strengthWindow = Math.max(windowDays, 1) * DAY_SECONDS;
+
   const width = el.clientWidth;
   if (!width) return; // container still hidden; caller redraws on show
 
   if (strengthPlot) {
+    // setData re-ranges x to the full extent, so the view has to be reapplied.
     strengthPlot.setData(data);
     strengthPlot.setSize({ width, height: HEIGHT });
+    strengthPlot.setScale("x", strengthDefaultView());
     return;
   }
 
   el.replaceChildren();
   strengthPlot = new uPlot(strengthOptions(width), data, el);
+  strengthPlot.setScale("x", strengthDefaultView());
 
   new ResizeObserver(() => {
     const w = el.clientWidth;

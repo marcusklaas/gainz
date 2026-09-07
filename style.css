@@ -111,7 +111,48 @@ nav button[aria-current="true"] {
   align-items: center;
   gap: .5rem;
 }
-#today header h2 { flex: 1; text-align: center; margin: 0; }
+#today header h2 {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: .4rem;
+  margin: 0;
+}
+
+/* Bare, unlike the arrows either side of it: a bordered box next to the title
+   reads as a third navigation button, which is the bulk this is avoiding. The
+   padding is the tap target and the only reason it is not simply the glyph. */
+#day-lock {
+  padding: .25rem;
+  border: 0;
+  background: none;
+  line-height: 0;
+  color: var(--dim);
+}
+#day-lock svg { fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; }
+#day-lock .open { display: none; }
+
+/* Armed. Amber rather than green: this is a state to notice and leave, not a
+   thing done correctly. */
+#day-lock[aria-pressed="true"] { color: var(--warn); }
+#day-lock[aria-pressed="true"] .shut { display: none; }
+#day-lock[aria-pressed="true"] .open { display: inline; }
+
+/* A grouping element and nothing else — the browser's own border and padding
+   would draw a box around half the screen. */
+#day-edit { margin: 0; padding: 0; border: 0; min-width: 0; }
+
+/* A fieldset establishes a block formatting context, so the first form's top
+   margin no longer collapses into the note above it and everything below moved
+   down. Dropping it restores the spacing exactly: the wrapper is here to group
+   controls, and it may not cost the layout a pixel. */
+#day-edit > :first-child { margin-top: 0; }
+
+/* The dimming is the whole "you are in the past" cue, so there is no separate
+   banner or tint: the region that cannot be typed into is visibly the region
+   that cannot be typed into. */
+#day-edit[disabled] { opacity: .55; }
 
 label {
   display: block;
@@ -220,12 +261,11 @@ h3 span {
 #stats { margin: 1.25rem 0; }
 
 /* uPlot draws axes and grid from JS options (see chart.ts theme()); these rules
-   cover the parts it renders as DOM. Everything else here is .chart, shared by
-   both charts on Trend — but only the weight one pans, and touch-action is what
-   trades a finger drag over it for scrolling the page. Over the strength chart
-   there is nothing to drag, so the page must keep the gesture. */
-#chart .u-over { touch-action: none; cursor: grab; }
-#chart .u-over:active { cursor: grabbing; }
+   cover the parts it renders as DOM. Everything here is .chart, shared by both
+   charts on Trend: both pan and zoom the same way, and touch-action is what
+   trades a finger drag over either of them for scrolling the page. */
+.chart .u-over { touch-action: none; cursor: grab; }
+.chart .u-over:active { cursor: grabbing; }
 
 /* uPlot sizes its root to min-content, which lets the legend widen the whole
    chart. Pinning it to the container keeps both to the same width. */
@@ -257,6 +297,10 @@ h3 span {
   min-width: 0;
   margin: 0;
 }
+/* A series uPlot draws but the readout does not report — the weight chart's
+   projection. uPlot builds one legend row per series with no way to opt out, so
+   the row is dropped here; chart.ts marks the series with the class. */
+.chart .u-legend tr.unlisted { display: none; }
 /* The numeric pairs hold their size unconditionally. Left shrinkable they would
    be squeezed along with the date on a narrow screen, which is the one thing
    the fixed widths below exist to prevent. */
@@ -286,8 +330,8 @@ h3 span {
 
 /* "70.05 kg", the longest the trend can read at a plausible bodyweight. */
 #chart .u-legend tr:not(:first-child) .u-value { width: 8.5ch; }
-/* The index is rebased to 100 at the left edge, and ten weeks of novice
-   progress already reads 248 — so four digits and a decimal, which is a
+/* The index is rebased to 100 at the first session on record, and ten weeks of
+   novice progress already reads 248 — so four digits and a decimal, which is a
    fifty-fold gain and will not be reached. */
 #strength-chart .u-legend tr:not(:first-child) .u-value { width: 6.5ch; }
 
@@ -432,6 +476,39 @@ li button { border: 0; background: none; padding: 0 .25rem; }
 
 #l-add-form { display: flex; gap: .4rem; }
 #l-add-form input { flex: 1; min-width: 0; }
+
+/* The stand-in for the popup Firefox on Android does not draw — see
+   src/datalist.ts, which is the only thing that ever creates this element. It
+   is styled as the field it drops out of rather than as a menu: same fill, same
+   border, joined to the input by the shared edge, so the two read as one
+   control the way a native one does. Nothing here is loaded on any other
+   browser, because nothing there ever builds the list. */
+.datalist-fallback {
+  position: absolute;
+  z-index: 30;
+  margin: -1px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 15rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: #1f2229;
+  border: 1px solid var(--line);
+  border-radius: 0 0 4px 4px;
+}
+.datalist-fallback li {
+  padding: .45rem .6rem;
+  cursor: pointer;
+  /* A phone taps this; a long name should not silently become another one. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.datalist-fallback li + li { border-top: 1px solid var(--line); }
+/* Feedback under the finger, for the moment between touching a suggestion and
+   the list closing on it. There is no hover state to pair it with: the only
+   pointer that reaches this is a finger. */
+.datalist-fallback li:active { color: var(--bg); background: var(--fg); }
 
 #lift-actions { display: flex; gap: .4rem; margin-top: 1.5rem; }
 #l-save { flex: 1; color: var(--fg); border-color: var(--fg); }
