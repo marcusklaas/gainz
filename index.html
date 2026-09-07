@@ -113,11 +113,14 @@
 
       <ul id="items"></ul>
 
-      <label class="check">
+      <!-- Hidden on future days: a day that has not happened cannot be fully
+           logged, and a tick there would feed planned intake into the TDEE fit
+           as eaten fact. See render() in main.ts. -->
+      <label class="check" id="logging-row">
         <input id="f-logging" type="checkbox">
         <span>Everything logged — count this day</span>
       </label>
-      <p class="note">Days left unticked are ignored by the TDEE and goal maths.</p>
+      <p class="note" id="logging-note">Days left unticked are ignored by the TDEE and goal maths.</p>
     </fieldset>
   </section>
 
