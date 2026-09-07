@@ -90,7 +90,7 @@
           <input id="f-weight" type="number" step="0.1" min="30" max="250" aria-label="Weight in kilograms">
           <span class="unit">kg</span>
         </span>
-        <button>Save weight</button>
+        <button id="weight-save">Save weight</button>
       </form>
 
       <form id="food-form">
@@ -113,9 +113,9 @@
 
       <ul id="items"></ul>
 
-      <!-- Hidden on future days: a day that has not happened cannot be fully
-           logged, and a tick there would feed planned intake into the TDEE fit
-           as eaten fact. See render() in main.ts. -->
+      <!-- Disabled on future days: a day that has not happened cannot be
+           fully logged, and a tick there would feed planned intake into the
+           TDEE fit as eaten fact. See render() in main.ts. -->
       <label class="check" id="logging-row">
         <input id="f-logging" type="checkbox">
         <span>Everything logged — count this day</span>

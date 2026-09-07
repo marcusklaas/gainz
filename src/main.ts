@@ -106,11 +106,11 @@ let day = todayKey();
 let unlocked = false;
 
 /**
- * Only the past is ever locked. Tomorrow holds nothing but plans — no weight,
- * no tick, nothing the estimator reads — so an accidental edit there corrupts
- * nothing and the padlock would be pure friction on the meal-prep flow.
+ * Today is never locked; every other day is — tomorrow included — until the
+ * padlock is tapped. Plans deserve the same deliberateness as history: an
+ * unlock is a statement about the next minute.
  */
-const locked = (): boolean => day < todayKey() && !unlocked;
+const locked = (): boolean => day !== todayKey() && !unlocked;
 
 /**
  * The only way the day on screen changes. Navigating always re-locks — stepping
@@ -412,9 +412,9 @@ $("f-logging").addEventListener("change", async () => {
  */
 function renderLock(): void {
   const lock = $<HTMLButtonElement>("day-lock");
-  // Today and tomorrow can never be locked (see locked()), so the padlock
-  // would be a control that does nothing on both.
-  lock.hidden = day >= todayKey();
+  // Today can never be locked (see locked()), so there the padlock would be
+  // a control that does nothing.
+  lock.hidden = day === todayKey();
   lock.setAttribute("aria-pressed", String(unlocked));
   lock.title = unlocked ? "Lock this day" : "Unlock to edit this day";
   $<HTMLFieldSetElement>("day-edit").disabled = locked();
@@ -449,13 +449,18 @@ async function render(src: Source = "server"): Promise<void> {
   renderLock();
   $<HTMLButtonElement>("next-day").disabled = day === addDays(today, 1);
 
-  // Tomorrow is food only. A weigh-in for a day that has not happened is a
-  // nonsense number, and the complete tick is what admits a day into the TDEE
-  // fit — both stay out of reach until the day arrives.
+  // Tomorrow is food only, and it says so in place: the weight box and the
+  // complete tick are dimmed and disabled rather than hidden, so the layout
+  // holds still between today and tomorrow. The tick is what admits a day
+  // into the TDEE fit, and a weigh-in for a day that has not happened is a
+  // nonsense number — both stay out of reach until the day arrives.
   const future = day > today;
-  $("weight-form").hidden = future;
-  $("logging-row").hidden = future;
-  $("logging-note").hidden = future;
+  for (const id of ["weight-form", "logging-row", "logging-note"]) {
+    $(id).classList.toggle("dimmed", future);
+  }
+  $<HTMLInputElement>("f-weight").disabled = future;
+  $<HTMLButtonElement>("weight-save").disabled = future;
+  $<HTMLInputElement>("f-logging").disabled = future;
   $<HTMLInputElement>("f-weight").value = d.weight_kg ? String(d.weight_kg) : "";
   $<HTMLInputElement>("f-logging").checked = d.logging === "complete";
   renderItems(d);

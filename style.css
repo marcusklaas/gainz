@@ -174,11 +174,10 @@ label.check input {
   accent-color: var(--ok);
 }
 
-/* The [hidden] rule is load-bearing, not tidiness: the display rules above
-   for #weight-form and label.check both beat the UA's [hidden] rule, so
-   without this the weight box and the logging tick would stay on screen on
-   future days with .hidden = true set on them. Same trap as #lift-resume. */
-#weight-form[hidden], #logging-row[hidden] { display: none; }
+/* Dimmed but present: the weight box and the logging tick on future days are
+   disabled in render() rather than hidden, so the layout holds still between
+   today and tomorrow. Same opacity as a locked day. */
+#weight-form.dimmed, #logging-row.dimmed, #logging-note.dimmed { opacity: .55; }
 
 input, select, textarea, button {
   font: inherit;
