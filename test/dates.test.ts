@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 // re-reads TZ on assignment, and nothing in dates.ts captures it at import.
 process.env.TZ = "Europe/Amsterdam";
 
-import { addDays, atKey, atTime, byAt, daysBetween, monthOf, parseDay, toDayKey } from "../src/dates.js";
+import { addDays, atKey, atTime, byAt, daysBetween, humanDay, monthOf, parseDay, toDayKey, todayKey } from "../src/dates.js";
 
 describe("toDayKey / parseDay", () => {
   it("pads month and day to two digits", () => {
@@ -141,5 +141,18 @@ describe("atTime", () => {
 
   it("pads single-digit hours and minutes", () => {
     assert.equal(atTime("2026-01-25T06:05:00.000Z"), "07:05");
+  });
+});
+
+describe("humanDay", () => {
+  it("names today, yesterday and tomorrow", () => {
+    const today = todayKey();
+    assert.equal(humanDay(today), "Today");
+    assert.equal(humanDay(addDays(today, -1)), "Yesterday");
+    assert.equal(humanDay(addDays(today, 1)), "Tomorrow");
+  });
+
+  it("falls back to a short date for anything further out", () => {
+    assert.equal(humanDay(addDays(todayKey(), 2)), parseDay(addDays(todayKey(), 2)).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }));
   });
 });

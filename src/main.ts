@@ -105,8 +105,12 @@ let day = todayKey();
  */
 let unlocked = false;
 
-/** Today is never locked; every other day is, until the padlock is tapped. */
-const locked = (): boolean => day !== todayKey() && !unlocked;
+/**
+ * Only the past is ever locked. Tomorrow holds nothing but plans — no weight,
+ * no tick, nothing the estimator reads — so an accidental edit there corrupts
+ * nothing and the padlock would be pure friction on the meal-prep flow.
+ */
+const locked = (): boolean => day < todayKey() && !unlocked;
 
 /**
  * The only way the day on screen changes. Navigating always re-locks — stepping
@@ -302,8 +306,12 @@ $("setup-form").addEventListener("submit", async (e) => {
 
 $("prev-day").addEventListener("click", () => goTo(addDays(day, -1)));
 
+/**
+ * One day past today and no further: tomorrow is the meal-prep scratch space,
+ * and anything beyond it is a calendar nobody asked for.
+ */
 $("next-day").addEventListener("click", () => {
-  if (day === todayKey()) return;
+  if (day === addDays(todayKey(), 1)) return;
   goTo(addDays(day, 1));
 });
 
@@ -404,7 +412,9 @@ $("f-logging").addEventListener("change", async () => {
  */
 function renderLock(): void {
   const lock = $<HTMLButtonElement>("day-lock");
-  lock.hidden = day === todayKey();
+  // Today and tomorrow can never be locked (see locked()), so the padlock
+  // would be a control that does nothing on both.
+  lock.hidden = day >= todayKey();
   lock.setAttribute("aria-pressed", String(unlocked));
   lock.title = unlocked ? "Lock this day" : "Unlock to edit this day";
   $<HTMLFieldSetElement>("day-edit").disabled = locked();
@@ -437,7 +447,15 @@ async function render(src: Source = "server"): Promise<void> {
   const d = await readDay(day, src);
   $("day-label").textContent = humanDay(day);
   renderLock();
-  $<HTMLButtonElement>("next-day").disabled = day === todayKey();
+  $<HTMLButtonElement>("next-day").disabled = day === addDays(today, 1);
+
+  // Tomorrow is food only. A weigh-in for a day that has not happened is a
+  // nonsense number, and the complete tick is what admits a day into the TDEE
+  // fit — both stay out of reach until the day arrives.
+  const future = day > today;
+  $("weight-form").hidden = future;
+  $("logging-row").hidden = future;
+  $("logging-note").hidden = future;
   $<HTMLInputElement>("f-weight").value = d.weight_kg ? String(d.weight_kg) : "";
   $<HTMLInputElement>("f-logging").checked = d.logging === "complete";
   renderItems(d);

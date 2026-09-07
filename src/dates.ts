@@ -77,5 +77,6 @@ export function humanDay(day: DayKey): string {
   const today = todayKey();
   if (day === today) return "Today";
   if (day === addDays(today, -1)) return "Yesterday";
+  if (day === addDays(today, 1)) return "Tomorrow";
   return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
 }
