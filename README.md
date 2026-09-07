@@ -19,15 +19,15 @@ TypeScript, no framework, no bundler. The only dependency is
 [uPlot](https://github.com/leeoniya/uPlot), vendored in `vendor/`.
 
 ```
-npm install
-npm run build     # tsc: src/ -> js/
-npm run test      # node:test over the estimators
-npm run serve     # http://localhost:8080
+bun install
+bun run build     # tsc: src/ -> js/
+bun run test      # bun test over the estimators
+bun run serve     # http://localhost:8080
 ```
 
 Tests cover the pure half of the app — `dates`, `estimate`, `lifts` and
 `export`, which is where all the arithmetic lives. They compile through `tsconfig.test.json` into
-`test-build/` and run on Node's built-in runner, so there is no test framework
+`test-build/` and run on Bun's test runner, so there is no test framework
 to install.
 
 `.github/workflows/checks.yml` runs the build and the tests on every pull
