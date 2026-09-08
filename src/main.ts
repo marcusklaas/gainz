@@ -14,10 +14,12 @@ import { checkAccess } from "./github.js";
 import {
   confirmedSets,
   draftOf,
+  elapsedSec,
   exerciseKey,
   exerciseNames,
   finish,
   fitTotal,
+  formatDuration,
   lastSessionNamed,
   moved,
   newDraft,
@@ -768,8 +770,10 @@ async function renderLifts(): Promise<void> {
   // now something you started and have not finished, never a past session you
   // happened to open.
   if (draft) {
+    const live = formatDuration(elapsedSec(draft.at, Date.now()) ?? undefined);
     resume.textContent =
-      `Resume — ${draft.name || "Unnamed session"} · started ${atTime(draft.at)}`;
+      `Resume — ${draft.name || "Unnamed session"} · started ${atTime(draft.at)}` +
+      (live ? ` · ${live} so far` : "");
   }
 
   const ul = $("sessions");
@@ -841,7 +845,11 @@ function renderEditor(): void {
   const d = current();
   if (!d) return;
 
-  $("lift-when").textContent = `${humanDay(d.day)} · started ${atTime(d.at)}`;
+  const stored = formatDuration(d.duration_s);
+  const live = !stored ? formatDuration(elapsedSec(d.at, Date.now()) ?? undefined) : null;
+  $("lift-when").textContent =
+    `${humanDay(d.day)} · started ${atTime(d.at)}` +
+    (stored ? ` · ${stored}` : live ? ` · ${live} so far` : "");
   // Delete removes the session from the repo and so is only ever offered for one
   // that is in it. Discard says which of the two it throws away, because in an
   // edit it sits next to Delete and the difference is the whole point.
@@ -1033,6 +1041,14 @@ $("l-save").addEventListener("click", async () => {
   if (!d) return;
   const session = finish(d);
   if (!session) return msg("lift-msg", "Confirm at least one set first.", "err");
+  // New sessions are stamped with the elapsed wall time; edits keep the
+  // duration they opened with. Absent stays absent, so history without it
+  // keeps reading as before and a save that cannot measure (legacy stamp,
+  // clock skew) writes no duration rather than a zero.
+  if (!edit && session.duration_s === undefined) {
+    const secs = elapsedSec(d.at, Date.now());
+    if (secs !== null) session.duration_s = secs;
+  }
 
   await updateDay(d.day, (x) => {
     const list = x.sessions ?? [];

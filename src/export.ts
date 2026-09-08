@@ -462,6 +462,11 @@ function sessions(list: DatedSession[], today: DayKey): string {
   // Oldest first, unlike the screens: a table read top to bottom is a history.
   for (const { day, session } of [...list].reverse()) {
     if (day < from || day > today) continue;
+    // Whole minutes, empty when the session predates duration tracking.
+    const mins =
+      session.duration_s !== undefined && Number.isFinite(session.duration_s) && session.duration_s > 0
+        ? Math.max(1, Math.round(session.duration_s / 60))
+        : "";
     for (const ex of session.exercises) {
       rows.push(
         row(
@@ -470,6 +475,7 @@ function sessions(list: DatedSession[], today: DayKey): string {
           ex.name,
           ex.sets.map((s) => `${s.weight_kg}x${s.reps}`).join(" "),
           n(topE1rm(ex.sets), 1),
+          mins,
         ),
       );
     }
@@ -477,7 +483,7 @@ function sessions(list: DatedSession[], today: DayKey): string {
 
   return block(
     `Sessions (${WINDOW.sessionDays} days)`,
-    "day,session,exercise,sets,top_e1rm_kg",
+    "day,session,exercise,sets,top_e1rm_kg,duration_min",
     rows,
   );
 }

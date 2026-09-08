@@ -9,10 +9,12 @@ import {
   confirmedSets,
   draftOf,
   e1rmPoints,
+  elapsedSec,
   exerciseKey,
   exerciseNames,
   finish,
   fitTotal,
+  formatDuration,
   lastSessionNamed,
   moved,
   newDraft,
@@ -315,6 +317,60 @@ describe("summarise", () => {
       summarise(session({ bench: [[100, 5], [100, 5]], row: [[80, 8]] })),
       "2 exercises · 3 sets",
     );
+  });
+
+  it("leaves sessions without a duration exactly as before", () => {
+    assert.equal(summarise(session({ bench: [[100, 5]] })), "1 exercise · 1 set");
+  });
+
+  it("appends a known duration", () => {
+    assert.equal(
+      summarise(session({ bench: [[100, 5]] }, { duration_s: 48 * 60 })),
+      "1 exercise · 1 set · 48 min",
+    );
+    assert.equal(
+      summarise(session({ bench: [[100, 5]] }, { duration_s: 65 * 60 })),
+      "1 exercise · 1 set · 1 h 5 min",
+    );
+  });
+
+  it("treats a non-positive duration as unknown", () => {
+    assert.equal(summarise(session({ bench: [[100, 5]] }, { duration_s: 0 })), "1 exercise · 1 set");
+  });
+});
+
+describe("duration", () => {
+  it("measures elapsed seconds from the start stamp", () => {
+    assert.equal(elapsedSec("2026-01-01T18:00:00.000Z", Date.parse("2026-01-01T18:48:00.000Z")), 2880);
+  });
+
+  it("is unknown for legacy stamps, skew and zero-length sessions", () => {
+    assert.equal(elapsedSec("19:40", Date.now()), null);
+    assert.equal(elapsedSec("2026-01-01T18:00:00.000Z", Date.parse("2026-01-01T17:00:00.000Z")), null);
+    assert.equal(elapsedSec("2026-01-01T18:00:00.000Z", Date.parse("2026-01-01T18:00:00.000Z")), null);
+    assert.equal(elapsedSec("not-a-date", Date.now()), null);
+  });
+
+  it("formats minutes and hours, and null when unknown", () => {
+    assert.equal(formatDuration(undefined), null);
+    assert.equal(formatDuration(0), null);
+    assert.equal(formatDuration(48 * 60), "48 min");
+    assert.equal(formatDuration(65 * 60), "1 h 5 min");
+    assert.equal(formatDuration(120 * 60), "2 h");
+  });
+
+  it("round-trips a duration through edit and finish", () => {
+    const s = session({ bench: [[100, 5]] }, { name: "Push", duration_s: 2700 });
+    const d = draftOf(on(1), s);
+    assert.equal(d.duration_s, 2700);
+    assert.deepEqual(finish(d), s);
+  });
+
+  it("leaves the field absent when it was never recorded", () => {
+    const s = session({ bench: [[100, 5]] }, { name: "Push" });
+    const d = draftOf(on(1), s);
+    assert.ok(!("duration_s" in d));
+    assert.ok(!("duration_s" in finish(d)!));
   });
 });
 
