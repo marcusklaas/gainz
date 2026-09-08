@@ -80,6 +80,12 @@ export interface Session {
   at: string;
   /** Absent on a one-off that was never named, which is also never a template. */
   name?: string;
+  /**
+   * Elapsed wall time from `at` to save, in seconds. Absent on sessions saved
+   * before duration tracking existed, and on any session whose length is
+   * unknown — readers must treat a missing value as unknown, never zero.
+   */
+  duration_s?: number;
   exercises: Exercise[];
 }
 
@@ -150,6 +156,12 @@ export interface Draft {
    *  session rather than the moment it was finished. */
   at: string;
   name: string;
+  /**
+   * Carried through to `Session.duration_s` on save. Set when an existing
+   * session with a known duration is opened for editing; absent on a session
+   * in progress, whose length is not known until it is saved.
+   */
+  duration_s?: number;
   exercises: DraftExercise[];
 }
 

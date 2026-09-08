@@ -122,6 +122,7 @@ export function draftOf(day: DayKey, session: Session): Draft {
     id: session.id,
     at: session.at,
     name: session.name ?? "",
+    ...(session.duration_s !== undefined ? { duration_s: session.duration_s } : {}),
     exercises: session.exercises.map((e) => ({
       name: e.name,
       sets: e.sets.map((s) => ({ ...s, done: true })),
@@ -168,15 +169,52 @@ export function finish(d: Draft): Session | null {
   if (!exercises.length) return null;
 
   const name = d.name.trim();
-  return { id: d.id, at: d.at, ...(name ? { name } : {}), exercises };
+  return {
+    id: d.id,
+    at: d.at,
+    ...(name ? { name } : {}),
+    ...(d.duration_s !== undefined ? { duration_s: d.duration_s } : {}),
+    exercises,
+  };
+}
+
+/**
+ * Elapsed seconds from an `at` stamp to `nowMs`. Null when either end is
+ * unknown or the interval is not positive — legacy "HH:MM" stamps, a clock
+ * going backwards, a session saved in the same second it was started. Null
+ * means "unknown", and the caller leaves the field absent rather than writing
+ * a zero that would read as a finding.
+ */
+export function elapsedSec(at: string, nowMs: number): number | null {
+  const started = Date.parse(at);
+  if (!Number.isFinite(started) || !Number.isFinite(nowMs)) return null;
+  const secs = Math.round((nowMs - started) / 1000);
+  return secs > 0 ? secs : null;
+}
+
+/**
+ * "45 min", "1 h 5 min" — null when the duration is absent or not positive,
+ * so sessions saved before tracking existed read exactly as they always did.
+ */
+export function formatDuration(duration_s: number | undefined): string | null {
+  if (duration_s === undefined || !Number.isFinite(duration_s) || duration_s <= 0) return null;
+  const mins = Math.max(1, Math.round(duration_s / 60));
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
 }
 
 /** "5 exercises · 18 sets" — a count rather than tonnage, which rewards light
- *  high-rep work disproportionately and reads as a metric when it is not. */
+ *  high-rep work disproportionately and reads as a metric when it is not.
+ *  A known duration is appended: "· 48 min". Absent stays absent, so history
+ *  saved before tracking reads exactly as before. */
 export function summarise(s: Session): string {
   const sets = s.exercises.reduce((n, e) => n + e.sets.length, 0);
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-  return `${plural(s.exercises.length, "exercise")} · ${plural(sets, "set")}`;
+  const base = `${plural(s.exercises.length, "exercise")} · ${plural(sets, "set")}`;
+  const dur = formatDuration(s.duration_s);
+  return dur ? `${base} · ${dur}` : base;
 }
 
 // -------------------------------------------------------- the strength index
