@@ -846,8 +846,12 @@ function renderEditor(): void {
   const d = current();
   if (!d) return;
 
+  // An edit is a session that already ended: without a stored duration its
+  // length is unknown, not still accruing. Only the session in progress
+  // (no edit open) gets a live "so far".
   const stored = formatDuration(d.duration_s);
-  const live = !stored ? formatDuration(elapsedSec(d.at, Date.now()) ?? undefined) : null;
+  const live =
+    !stored && edit === null ? formatDuration(elapsedSec(d.at, Date.now()) ?? undefined) : null;
   $("lift-when").textContent =
     `${humanDay(d.day)} · started ${atTime(d.at)}` +
     (stored ? ` · ${stored}` : live ? ` · ${live} so far` : "");
