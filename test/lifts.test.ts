@@ -19,6 +19,7 @@ import {
   moved,
   newDraft,
   panelFit,
+  propagateWeight,
   sessionsOf,
   strengthIndex,
   strengthOf,
@@ -27,7 +28,7 @@ import {
   type DatedSession,
   type LiftPoint,
 } from "../src/lifts.js";
-import { EPLEY_REPS, type Day, type DayKey, type Draft, type Session } from "../src/types.js";
+import { EPLEY_REPS, type Day, type DayKey, type Draft, type DraftExercise, type Session } from "../src/types.js";
 
 // --------------------------------------------------------------- fixtures
 
@@ -371,6 +372,46 @@ describe("duration", () => {
     const d = draftOf(on(1), s);
     assert.ok(!("duration_s" in d));
     assert.ok(!("duration_s" in finish(d)!));
+  });
+});
+
+describe("propagateWeight", () => {
+  const exercise = (sets: DraftExercise["sets"]): DraftExercise => ({ name: "bench", sets });
+
+  it("moves later ghosts to the confirmed weight", () => {
+    const ex = exercise([
+      { weight_kg: 102.5, reps: 5, done: true },
+      { weight_kg: 100, reps: 5 },
+      { weight_kg: 100, reps: 8 },
+    ]);
+    propagateWeight(ex, 0, 102.5);
+    assert.deepEqual(ex.sets.map((s) => s.weight_kg), [102.5, 102.5, 102.5]);
+    // Reps are untouched: only the weight follows.
+    assert.deepEqual(ex.sets.map((s) => s.reps), [5, 5, 8]);
+  });
+
+  it("leaves confirmed sets and earlier sets alone", () => {
+    const ex = exercise([
+      { weight_kg: 100, reps: 5 },
+      { weight_kg: 102.5, reps: 5, done: true },
+      { weight_kg: 100, reps: 5, done: true },
+      { weight_kg: 100, reps: 5 },
+    ]);
+    propagateWeight(ex, 1, 102.5);
+    assert.deepEqual(ex.sets.map((s) => s.weight_kg), [100, 102.5, 100, 102.5]);
+  });
+
+  it("is a no-op on the last set or when nothing follows unconfirmed", () => {
+    const last = exercise([
+      { weight_kg: 100, reps: 5, done: true },
+      { weight_kg: 102.5, reps: 5, done: true },
+    ]);
+    propagateWeight(last, 1, 102.5);
+    assert.deepEqual(last.sets.map((s) => s.weight_kg), [100, 102.5]);
+
+    const empty = exercise([]);
+    propagateWeight(empty, 0, 102.5);
+    assert.deepEqual(empty.sets, []);
   });
 });
 

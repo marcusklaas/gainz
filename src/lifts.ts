@@ -134,6 +134,21 @@ export const confirmedSets = (d: Draft): number =>
   d.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done).length, 0);
 
 /**
+ * The confirmed weight is what the rest of the exercise will be lifted at.
+ * Every later set still awaiting confirmation follows it; sets already done
+ * keep what was actually lifted, and earlier sets are already history. Same
+ * weight across the sets is the common case — progressive overload moves one
+ * number, not three — so one edit sets the expectation and a set meant to
+ * differ is still one edit away.
+ */
+export function propagateWeight(exercise: DraftExercise, from: number, weight_kg: number): void {
+  for (let i = from + 1; i < exercise.sets.length; i++) {
+    const later = exercise.sets[i];
+    if (later && !later.done) later.weight_kg = weight_kg;
+  }
+}
+
+/**
  * The list with one item moved. Order here is the array and nothing else — there
  * is no position field to keep in step, and no id to renumber — so this is the
  * whole of what reordering a session is.
