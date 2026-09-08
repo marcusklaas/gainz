@@ -23,6 +23,7 @@ import {
   lastSessionNamed,
   moved,
   newDraft,
+  propagateWeight,
   sessionsOf,
   strengthOf,
   summarise,
@@ -897,10 +898,15 @@ function renderEditor(): void {
         i.value = value ? String(value) : "";
         // Typing a number *is* saying you did it that way, so an edit confirms
         // the row. Reps decide, because a set with none did not happen.
+        // Confirming a weight also sets it for the sets still to come: the
+        // next sets are lifted at this weight far more often than not, so the
+        // ghosts after this one follow it and only a set meant to differ needs
+        // its own edit.
         i.addEventListener("change", () =>
-          editDraft(() => {
+          editDraft((x) => {
             apply(Number(i.value));
             set.done = set.reps > 0;
+            if (unit === "kg" && set.done) propagateWeight(x.exercises[ei]!, si, set.weight_kg);
           }),
         );
         return i;
