@@ -79,6 +79,53 @@ export function exerciseNames(list: DatedSession[]): string[] {
   );
 }
 
+/**
+ * The sessions with only these exercises in them: what the strength picker
+ * hands the index. Sessions left with nothing are dropped. Null is everything
+ * — the default, and what All restores — so the unfiltered path reads exactly
+ * as it always did, and strengthOf needs no new parameter to learn filtering.
+ */
+export function selectExercises(
+  list: DatedSession[],
+  keys: ReadonlySet<string> | null,
+): DatedSession[] {
+  if (keys === null) return list;
+  const want = new Set([...keys].map(exerciseKey));
+  const out: DatedSession[] = [];
+  for (const { day, session } of list) {
+    const exercises = session.exercises.filter((e) => want.has(exerciseKey(e.name)));
+    if (exercises.length) out.push({ day, session: { ...session, exercises } });
+  }
+  return out;
+}
+
+/**
+ * The exercises trained under one template name — what the Push chip checks.
+ * A union, so a movement logged under two templates belongs to both; matching
+ * is on the normalised name, so "push" finds "Push".
+ */
+export function templateExercises(list: DatedSession[], template: string): Set<string> {
+  const want = exerciseKey(template);
+  const out = new Set<string>();
+  for (const { session } of list) {
+    if (!session.name || exerciseKey(session.name) !== want) continue;
+    for (const e of session.exercises) out.add(exerciseKey(e.name));
+  }
+  return out;
+}
+
+/**
+ * The one key in the basket, or null. Which is what switches the chart from
+ * the pooled index to that movement's own e1RM — one exercise trains alone,
+ * two or more pool, and the count is read off the sessions rather than the
+ * picker's state so the two cannot disagree.
+ */
+export function singleKey(list: DatedSession[]): string | null {
+  const keys = new Set<string>();
+  for (const { session } of list) for (const e of session.exercises) keys.add(exerciseKey(e.name));
+  return keys.size === 1 ? [...keys][0]! : null;
+}
+
 /** The session a template prefills from. `exceptId` skips the one being edited,
  *  so reopening a saved session does not offer to prefill from itself. */
 export function lastSessionNamed(

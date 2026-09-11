@@ -16,6 +16,7 @@ import { checkAccess } from "./github.js";
 import {
   confirmedSets,
   draftOf,
+  e1rmPoints,
   elapsedSec,
   exerciseKey,
   exerciseNames,
@@ -26,9 +27,12 @@ import {
   moved,
   newDraft,
   propagateWeight,
+  selectExercises,
   sessionsOf,
+  singleKey,
   strengthOf,
   summarise,
+  templateExercises,
   templateNames,
   type DatedSession,
   type Fit,
@@ -197,6 +201,24 @@ let latest: Estimate | null = null;
  *  the last render worked out, whenever the screen is next on show. */
 let latestStrength: Strength | null = null;
 
+/**
+ * What the strength picture is built from: every session in the loaded
+ * history, the picker-narrowed subset of it, and the one key in that subset
+ * when it holds exactly one — which is what switches the chart from the
+ * pooled index to that movement's own e1RM.
+ */
+let latestSessions: DatedSession[] = [];
+let latestFiltered: DatedSession[] = [];
+let latestSingle: string | null = null;
+
+/**
+ * Null is everything: the default, and what All restores. An explicit set the
+ * moment anything is unchecked, so the boxes always show exactly what the
+ * chart is built from. In memory only — a fresh visit opens on the default,
+ * like every other view on this screen.
+ */
+let strengthKeys: Set<string> | null = null;
+
 /** The same, for intake vs TDEE: the third chart on Trend. */
 let latestCalories: CaloriePoint[] | null = null;
 
@@ -212,7 +234,7 @@ let chartModule: Promise<typeof import("./chart.js")> | null = null;
  * two paints racing across the dynamic import settle on the same picture.
  */
 async function paintChart(): Promise<void> {
-  const { drawCalories, drawStrength, drawTrend } = await (chartModule ??= import("./chart.js"));
+  const { drawCalories, drawE1rm, drawStrength, drawTrend } = await (chartModule ??= import("./chart.js"));
   // Every view opens on exactly what the headline under it is built from: for
   // weight, the days of intake the TDEE fit averaged plus the week the slope
   // says comes next; for strength, the window the panel fit is computed over;
@@ -224,8 +246,22 @@ async function paintChart(): Promise<void> {
     historyDays: e?.tdeeWindowDays ?? 21,
     projectionDays: e?.projectionDays ?? 0,
   });
-  drawStrength($("strength-chart"), latestStrength?.index ?? [], cfg?.strength.windowDays ?? 42);
-  drawCalories($("calorie-chart"), latestCalories ?? [], cfg?.strength.windowDays ?? 42);
+  // One movement in the basket shows its own e1RM in kg; anything else shows
+  // the pooled index. The kg class widens the legend slot, which reads
+  // "250.0 kg" where the index reads "248.3".
+  const windowDays = cfg?.strength.windowDays ?? 42;
+  const single = latestSingle;
+  $("strength-chart").classList.toggle("kg", single !== null);
+  if (single !== null) {
+    drawE1rm(
+      $("strength-chart"),
+      e1rmPoints(latestFiltered).filter((p) => p.key === single),
+      windowDays,
+    );
+  } else {
+    drawStrength($("strength-chart"), latestStrength?.index ?? [], windowDays);
+  }
+  drawCalories($("calorie-chart"), latestCalories ?? [], windowDays);
 }
 
 function show(name: Screen): void {
@@ -488,8 +524,11 @@ async function render(src: Source = "server"): Promise<void> {
 
   // Read over the same history and dated to the same day as the weight chart
   // beside it, so browsing back moves both pictures together rather than one.
-  latestStrength = strengthOf(sessionsOf(past), day, cfg.strength.windowDays);
-  renderStrength(latestStrength);
+  // The picker narrows the basket first; its selection survives re-renders,
+  // so a save mid-inspection does not silently restore everything.
+  latestSessions = sessionsOf(past);
+  refreshStrength();
+  renderStrengthPicker(latestSessions);
 
   // The same window as the strength verdict above it, over the same history.
   latestCalories = calorieSeries(cfg, past, day, cfg.strength.windowDays);
@@ -527,14 +566,15 @@ const plusMinus = (f: Fit): string =>
  * failure this whole design is arranged against. At an ordinary rate of
  * progress it takes eight or twelve weeks of window before the ± clears.
  */
-function renderStrength(s: Strength | null): void {
+function renderStrength(s: Strength | null, nothingThere = false): void {
   const note = $("strength-note");
   const from = $("strength-from");
   const fit = s?.fit ?? null;
 
   if (!fit) {
-    note.textContent =
-      s && s.index.length
+    note.textContent = nothingThere
+      ? "Nothing in this selection — tick an exercise, or All to restore everything."
+      : s && s.index.length
         ? "Not enough logged yet to fit a trend — an exercise has to be repeated to say anything."
         : "No sessions logged yet. The index is built from your best set of each exercise.";
     from.textContent = "";
@@ -547,6 +587,105 @@ function renderStrength(s: Strength | null): void {
 
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   from.textContent = `from ${plural(fit.points, "exercise-session")} across ${plural(fit.exercises, "exercise")}`;
+}
+
+// -------------------------------------------------------- strength picker
+//
+// One tap between everything and one thing. Chips set the basket — All plus
+// every template name, each checking the exercises trained under it — and the
+// checkboxes tune it, with "only" soloing a row. A single-exercise basket
+// switches the chart to that movement's e1RM; the headline never changes
+// shape, because panelFit on one series is the same fit.
+
+/** Rebuilds the picture from the current selection, without touching the picker. */
+function refreshStrength(): void {
+  const cfg = cachedConfig();
+  if (!cfg) return;
+  latestFiltered = selectExercises(latestSessions, strengthKeys);
+  latestSingle = singleKey(latestFiltered);
+  latestStrength = strengthOf(latestFiltered, day, cfg.strength.windowDays);
+  renderStrength(latestStrength, latestFiltered.length === 0 && latestSessions.length > 0);
+  if (!$("trend").hidden) void paintChart();
+}
+
+/** Every key in the loaded history — what the first untick subtracts from. */
+function allStrengthKeys(): Set<string> {
+  const out = new Set<string>();
+  for (const { session } of latestSessions) {
+    for (const e of session.exercises) out.add(exerciseKey(e.name));
+  }
+  return out;
+}
+
+function setStrengthKeys(keys: Set<string> | null): void {
+  strengthKeys = keys;
+  syncStrengthPicker();
+  refreshStrength();
+}
+
+function toggleStrengthKey(key: string, on: boolean): void {
+  const next = new Set(strengthKeys ?? allStrengthKeys());
+  if (on) next.add(key);
+  else next.delete(key);
+  strengthKeys = next;
+  // The tapped box already shows the new state and the rows are not rebuilt,
+  // so the tap never costs focus.
+  refreshStrength();
+}
+
+/** Checks follow state after a chip or "only" tap. Rows rebuild on render()
+ *  only, never under the cursor. */
+function syncStrengthPicker(): void {
+  for (const box of document.querySelectorAll<HTMLInputElement>("#strength-rows input")) {
+    box.checked = strengthKeys === null || strengthKeys.has(box.dataset["key"]!);
+  }
+}
+
+/** Chips plus checkbox rows, rebuilt whenever the history behind them moves. */
+function renderStrengthPicker(sessions: DatedSession[]): void {
+  $("strength-filter").hidden = sessions.length === 0;
+
+  const presets = $("strength-presets");
+  presets.replaceChildren();
+  const all = document.createElement("button");
+  all.textContent = "All";
+  all.className = "chip";
+  all.addEventListener("click", () => setStrengthKeys(null));
+  presets.append(all);
+  for (const name of templateNames(sessions)) {
+    const b = document.createElement("button");
+    b.textContent = name;
+    b.className = "chip";
+    b.addEventListener("click", () => setStrengthKeys(templateExercises(sessions, name)));
+    presets.append(b);
+  }
+
+  const rows = $("strength-rows");
+  rows.replaceChildren();
+  for (const name of exerciseNames(sessions)) {
+    const key = exerciseKey(name);
+    const row = document.createElement("div");
+    row.className = "srow";
+
+    const label = document.createElement("label");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.dataset["key"] = key;
+    box.checked = strengthKeys === null || strengthKeys.has(key);
+    box.addEventListener("change", () => toggleStrengthKey(key, box.checked));
+    const span = document.createElement("span");
+    span.textContent = name;
+    label.append(box, span);
+
+    const only = document.createElement("button");
+    only.type = "button";
+    only.textContent = "only";
+    only.className = "only";
+    only.addEventListener("click", () => setStrengthKeys(new Set([key])));
+
+    row.append(label, only);
+    rows.append(row);
+  }
 }
 
 // ---------------------------------------------------------------- calories
