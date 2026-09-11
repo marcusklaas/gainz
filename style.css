@@ -339,6 +339,10 @@ h3 span {
    novice progress already reads 248 — so four digits and a decimal, which is a
    fifty-fold gain and will not be reached. */
 #strength-chart .u-legend tr:not(:first-child) .u-value { width: 6.5ch; }
+/* Four digits, a space and "kcal" — "2543 kcal" is the longest either slot can
+   read, and the dash it shows on an unlogged day is narrower, which without
+   this is the whole of the squirm. */
+#calorie-chart .u-legend tr:not(:first-child) .u-value { width: 9.5ch; }
 
 #trend-note { margin: .75rem 0 .25rem; }
 
