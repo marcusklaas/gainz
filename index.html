@@ -180,6 +180,13 @@
   </section>
 
   <section id="trend" hidden>
+    <!-- First, because it is the answer and the charts are the working: what
+         happened this week, then the three pictures behind it. Rolling, not
+         calendar — the heading names its length because "this week" and "last
+         week" both have two readings and this has one. -->
+    <h2>Last 7 days</h2>
+    <dl id="week"></dl>
+
     <!-- Says what is being charted, which the tab does not: "Trend" names the
          screen, "Weight" names the line. Worth the row that Lifts just gave up. -->
     <h2>Weight</h2>
@@ -196,10 +203,11 @@
     <p id="strength-note"></p>
     <p id="strength-from" class="note"></p>
 
-    <!-- Rolling, not calendar — the heading names its length because "this
-         week" and "last week" both have two readings and this has one. -->
-    <h2>Last 7 days</h2>
-    <dl id="week"></dl>
+    <!-- Daily intake against the TDEE trajectory, over the same window as the
+         strength verdict above it. Gaps are unlogged days, never zeros. -->
+    <h2>Calories</h2>
+    <div id="calorie-chart" class="chart"></div>
+    <p id="calorie-note"></p>
   </section>
 
   <section id="settings" hidden>

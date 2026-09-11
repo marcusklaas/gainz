@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import { defaultConfig } from "../src/config.js";
 import { addDays } from "../src/dates.js";
 import {
+  calorieSeries,
   dayKcal,
   dayProtein,
   estimate,
@@ -637,5 +638,68 @@ describe("estimate", () => {
     assert.equal(e.samples.length, 60);
     assert.equal(e.trendLine.length, 60);
     assert.equal(e.trendKg, e.trendLine[e.trendLine.length - 1]!.kg);
+  });
+});
+
+// ---------------------------------------------------------- calories chart
+
+describe("calorieSeries", () => {
+  const today = on(29);
+
+  /** Weighed and fully logged every day: intake 2500, drifting down slowly. */
+  const steady = (): Map<DayKey, Day> =>
+    history(30, (i) => ({ ...logged(2500, 2400, 150), weight_kg: 85 - i * 0.02 }));
+
+  it("marks intake only on fully logged days, never zero", () => {
+    const days = steady();
+    // Untick one day, empty another, drop a third entirely.
+    days.set(on(5), { items: [food(2500)] });
+    days.set(on(6), { items: [], logging: "complete" });
+    days.delete(on(7));
+    const rows = calorieSeries(config(), days, today, 30);
+    assert.equal(rows.length, 30);
+    assert.equal(rows[5]!.kcal, null);
+    assert.equal(rows[6]!.kcal, null);
+    assert.equal(rows[7]!.kcal, null);
+    assert.equal(rows[8]!.kcal, 2500);
+  });
+
+  it("has no TDEE before the first weigh-in", () => {
+    const days = steady();
+    for (const d of days.values()) delete d.weight_kg;
+    days.get(on(20))!.weight_kg = 84;
+    const rows = calorieSeries(config(), days, today, 30);
+    assert.equal(rows.length, 30);
+    assert.ok(
+      rows.every((r) => (r.day < on(20) ? r.tdee === null : r.tdee !== null)),
+      "TDEE should appear exactly once weighed",
+    );
+  });
+
+  it("drops leading days with neither intake nor TDEE", () => {
+    const days = steady();
+    // Nothing at all for the first ten days: no log, no scale.
+    for (let i = 0; i < 10; i++) days.delete(on(i));
+    const rows = calorieSeries(config(), days, today, 30);
+    assert.equal(rows[0]!.day, on(10));
+  });
+
+  it("is empty when there is nothing to draw", () => {
+    assert.deepEqual(calorieSeries(config(), new Map(), today, 42), []);
+  });
+
+  it("agrees with estimate on the last day: one path, not two", () => {
+    const days = steady();
+    const rows = calorieSeries(config(), days, today, 30);
+    const last = rows[rows.length - 1]!;
+    assert.equal(last.day, today);
+    const e = estimate(config(), days, addDays(today, 1))!;
+    close(last.tdee!, e.tdee, 1e-9);
+  });
+
+  it("counts a ticked today as finished", () => {
+    const days = steady();
+    const rows = calorieSeries(config(), days, today, 30);
+    assert.equal(rows[rows.length - 1]!.kcal, 2500);
   });
 });
