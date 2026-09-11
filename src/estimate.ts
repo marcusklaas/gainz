@@ -351,3 +351,49 @@ export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Es
     proteinTarget: trendKg * cfg.goal.proteinGPerKg,
   };
 }
+
+// ---------------------------------------------------------- calories chart
+//
+// Intake against the TDEE trajectory: one row per day, null wherever the day
+// has nothing to say. Reuses estimate() per day over the truncated history —
+// the same shape as export's estimateAt — rather than carrying smoother state
+// forward. A single ordered pass would be O(n) instead of O(n × window), but
+// at ~42 days of window over a few hundred points the whole thing is
+// sub-millisecond, and one code path means the chart can never disagree with
+// the headline number.
+
+/** One day of the calories chart. Null is "not recorded", never zero. */
+export interface CaloriePoint {
+  day: DayKey;
+  /** Day total, set only on days the user confirmed are fully logged. */
+  kcal: number | null;
+  /** The estimate as it read that evening, from data up to that day only. */
+  tdee: number | null;
+}
+
+/**
+ * `windowDays` back from `today`, leading days with neither value dropped so
+ * a short history opens on its data rather than on empty axis. Shares its
+ * window with the strength verdict, so the two pictures tell the same stretch
+ * of time — clamped here by what exists, not by what was asked for.
+ */
+export function calorieSeries(
+  cfg: Config,
+  days: Map<DayKey, Day>,
+  today: DayKey,
+  windowDays: number,
+): CaloriePoint[] {
+  const from = addDays(today, -(Math.max(windowDays, 1) - 1));
+  const out: CaloriePoint[] = [];
+  for (let d = from; d <= today; d = addDays(d, 1)) {
+    const sub = new Map([...days.entries()].filter(([k]) => k <= d));
+    // Tomorrow's frame over today's data: the day in question counts as
+    // finished, exactly as estimateAt does for the export.
+    const est = estimate(cfg, sub, addDays(d, 1));
+    out.push({ day: d, kcal: countedKcal(days.get(d)), tdee: est?.tdee ?? null });
+  }
+  // Leading nothing — before the first weigh-in there is no TDEE, and before
+  // the first log there is no intake either.
+  const first = out.findIndex((p) => p.kcal !== null || p.tdee !== null);
+  return first === -1 ? [] : out.slice(first);
+}

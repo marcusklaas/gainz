@@ -7,7 +7,7 @@
 // data. It is the only runtime dependency in the project.
 import uPlot from "../vendor/uPlot.esm.js";
 import { parseDay } from "./dates.js";
-import { projection, type HoltPoint, type Sample } from "./estimate.js";
+import { projection, type CaloriePoint, type HoltPoint, type Sample } from "./estimate.js";
 import type { IndexPoint } from "./lifts.js";
 
 const DAY_SECONDS = 86_400;
@@ -450,5 +450,140 @@ export function drawStrength(el: HTMLElement, index: IndexPoint[], windowDays: n
   new ResizeObserver(() => {
     const w = el.clientWidth;
     if (strengthPlot && w) strengthPlot.setSize({ width: w, height: HEIGHT });
+  }).observe(el);
+}
+
+// ------------------------------------------------------------ intake vs TDEE
+//
+// Its own chart below the strength one and not merged with either: it shares
+// their x axis and nothing else. One y axis is enough — intake and TDEE are
+// both kcal, which is what makes this mergeable where weight-vs-strength was
+// not.
+//
+// Intake is points joined by segments, not just points: consecutive counted
+// days are readings of one ongoing quantity. uPlot breaks the line wherever
+// the value is null, so unlogged days read as gaps rather than as zeros —
+// the same "empty means not recorded" rule the export prints in words.
+
+let caloriePlot: uPlot | null = null;
+/** Full data extent, so pan/zoom can be clamped to it. */
+let calorieBounds: Extent = { min: 0, max: 0 };
+/** Seconds of history the default view opens on, set on every draw — always
+ *  before the plot that reads it through the plugin exists. */
+let calorieWindow = 0;
+
+/**
+ * The window the series was built over — the same strength window, so the two
+ * pictures tell the same stretch of time. Everything older is still there; pan
+ * or zoom out to reach it.
+ */
+function calorieDefaultView(): Extent {
+  return {
+    min: Math.max(calorieBounds.max - calorieWindow, calorieBounds.min),
+    max: calorieBounds.max,
+  };
+}
+
+/** Shared with the charts above; only the series differ. */
+function calorieOptions(width: number): uPlot.Options {
+  const c = theme();
+  const axis = {
+    stroke: c.dim,
+    grid: { stroke: c.line, width: 1 },
+    ticks: { stroke: c.line, width: 1 },
+    font: "11px system-ui, sans-serif",
+  };
+
+  return {
+    width,
+    height: HEIGHT,
+    padding: [8, 8, 0, 0],
+    cursor: { drag: { x: false, y: false }, points: { size: 7 } },
+    legend: { show: true, live: true, markers: { show: false } },
+    scales: { x: { time: true } },
+    axes: [
+      { ...axis },
+      { ...axis, size: 44, values: (_u, vals) => vals.map((v) => v.toFixed(0)) },
+    ],
+    series: [
+      {
+        label: "date",
+        value: (_u, v) =>
+          v == null
+            ? "—"
+            : new Date(v * 1000).toLocaleDateString(undefined, {
+                weekday: "short",
+                day: "numeric",
+                month: "short",
+              }),
+      },
+      {
+        // What was actually eaten: the foreground line, with a dot on every
+        // counted day so a lone log in a sparse stretch still reads.
+        label: "intake",
+        stroke: c.fg,
+        width: 1.5,
+        points: { show: true, size: 3.5, stroke: c.fg, fill: c.fg },
+        value: (_u, v) => (v == null ? "—" : `${v.toFixed(0)} kcal`),
+      },
+      {
+        // The estimate: the same colour as the weight trend, because it is
+        // the same kind of thing — a smoothed reading, not a measurement.
+        label: "tdee",
+        stroke: c.ok,
+        width: 2,
+        points: { show: false },
+        value: (_u, v) => (v == null ? "—" : `${v.toFixed(0)} kcal`),
+      },
+    ],
+    plugins: [panZoom(() => calorieBounds, calorieDefaultView)],
+  };
+}
+
+/**
+ * Daily intake against the TDEE trajectory, opening on the window the series
+ * was built over.
+ *
+ * No fitted line over either series. Intake is already daily truth and needs
+ * no fit; the TDEE line *is* the smoothed reading, and a second smoothing of
+ * it would be a claim about method this chart is not making.
+ */
+export function drawCalories(el: HTMLElement, points: CaloriePoint[], windowDays: number): void {
+  const usable = points.filter((p) => p.kcal !== null || p.tdee !== null);
+  if (usable.length < 2) {
+    caloriePlot?.destroy();
+    caloriePlot = null;
+    el.replaceChildren();
+    return;
+  }
+
+  const data: uPlot.AlignedData = [
+    usable.map(toX),
+    usable.map((p) => p.kcal),
+    usable.map((p) => p.tdee),
+  ];
+
+  const xs = data[0];
+  calorieBounds = { min: xs[0]!, max: xs[xs.length - 1]! };
+  calorieWindow = Math.max(windowDays, 1) * DAY_SECONDS;
+
+  const width = el.clientWidth;
+  if (!width) return; // container still hidden; caller redraws on show
+
+  if (caloriePlot) {
+    // setData re-ranges x to the full extent, so the view has to be reapplied.
+    caloriePlot.setData(data);
+    caloriePlot.setSize({ width, height: HEIGHT });
+    caloriePlot.setScale("x", calorieDefaultView());
+    return;
+  }
+
+  el.replaceChildren();
+  caloriePlot = new uPlot(calorieOptions(width), data, el);
+  caloriePlot.setScale("x", calorieDefaultView());
+
+  new ResizeObserver(() => {
+    const w = el.clientWidth;
+    if (caloriePlot && w) caloriePlot.setSize({ width: w, height: HEIGHT });
   }).observe(el);
 }

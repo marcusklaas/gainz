@@ -2,11 +2,13 @@ import { at, defaultConfig, FIELDS, put, withDefaults } from "./config.js";
 import { installDatalistFallback } from "./datalist.js";
 import { addDays, atTime, byAt, humanDay, monthOf, nowStamp, todayKey } from "./dates.js";
 import {
+  calorieSeries,
   dayKcal,
   dayProtein,
   estimate,
   WEEK_DAYS,
   weekSummary,
+  type CaloriePoint,
   type Estimate,
 } from "./estimate.js";
 import { buildContext, contextFrom } from "./export.js";
@@ -195,6 +197,9 @@ let latest: Estimate | null = null;
  *  the last render worked out, whenever the screen is next on show. */
 let latestStrength: Strength | null = null;
 
+/** The same, for intake vs TDEE: the third chart on Trend. */
+let latestCalories: CaloriePoint[] | null = null;
+
 /**
  * uPlot is by far the largest thing the app loads and Today never shows it, so
  * it is fetched the first time Trend is actually looked at rather than being
@@ -207,10 +212,12 @@ let chartModule: Promise<typeof import("./chart.js")> | null = null;
  * two paints racing across the dynamic import settle on the same picture.
  */
 async function paintChart(): Promise<void> {
-  const { drawStrength, drawTrend } = await (chartModule ??= import("./chart.js"));
-  // Both views open on exactly what the headline under them is built from: for
+  const { drawCalories, drawStrength, drawTrend } = await (chartModule ??= import("./chart.js"));
+  // Every view opens on exactly what the headline under it is built from: for
   // weight, the days of intake the TDEE fit averaged plus the week the slope
-  // says comes next; for strength, the window the panel fit is computed over.
+  // says comes next; for strength, the window the panel fit is computed over;
+  // for calories, that same strength window, so the two pictures below the
+  // weight chart tell the same stretch of time.
   const cfg = cachedConfig();
   const e = cfg?.estimator;
   drawTrend($("chart"), latest?.samples ?? [], latest?.trendLine ?? [], {
@@ -218,6 +225,7 @@ async function paintChart(): Promise<void> {
     projectionDays: e?.projectionDays ?? 0,
   });
   drawStrength($("strength-chart"), latestStrength?.index ?? [], cfg?.strength.windowDays ?? 42);
+  drawCalories($("calorie-chart"), latestCalories ?? [], cfg?.strength.windowDays ?? 42);
 }
 
 function show(name: Screen): void {
@@ -238,7 +246,7 @@ function show(name: Screen): void {
   }
   // uPlot sizes from the container, which measures zero while hidden, so the
   // chart can only be built once its section is on screen.
-  // Unconditional: the two charts are independent, and a log with sessions but
+  // Unconditional: the three charts are independent, and a log with sessions but
   // no weigh-ins still has a strength index to draw.
   if (name === "trend") void paintChart();
   if (name === "lifts") void renderLifts();
@@ -483,6 +491,10 @@ async function render(src: Source = "server"): Promise<void> {
   latestStrength = strengthOf(sessionsOf(past), day, cfg.strength.windowDays);
   renderStrength(latestStrength);
 
+  // The same window as the strength verdict above it, over the same history.
+  latestCalories = calorieSeries(cfg, past, day, cfg.strength.windowDays);
+  renderCalories(latestCalories);
+
   // Only ever pinned from a server read. The cache pass exists to put something
   // on screen fast, and a number derived from a stale month is not one to write
   // down permanently as what today was judged against.
@@ -535,6 +547,22 @@ function renderStrength(s: Strength | null): void {
 
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   from.textContent = `from ${plural(fit.points, "exercise-session")} across ${plural(fit.exercises, "exercise")}`;
+}
+
+// ---------------------------------------------------------------- calories
+//
+// No verdict under this one: unlike strength there is no fit to report, only
+// the two lines. The note speaks solely when there is nothing to draw —
+// otherwise it stays out of the way.
+
+/** Empty unless the series has nothing to draw, so the note never narrates. */
+function renderCalories(points: CaloriePoint[] | null): void {
+  const note = $("calorie-note");
+  const usable = (points ?? []).filter((p) => p.kcal !== null || p.tdee !== null);
+  note.textContent =
+    usable.length >= 2
+      ? ""
+      : "Not enough logged yet to draw intake against TDEE — tick a day complete and weigh in.";
 }
 
 /**
