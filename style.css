@@ -343,6 +343,32 @@ h3 span {
    read, and the dash it shows on an unlogged day is narrower, which without
    this is the whole of the squirm. */
 #calorie-chart .u-legend tr:not(:first-child) .u-value { width: 9.5ch; }
+/* Single-exercise mode reads e1RM in kg, where "250.0 kg" overflows the
+   6.5ch the index is sized for. The class is toggled with the mode. */
+#strength-chart.kg .u-legend tr:not(:first-child) .u-value { width: 8.5ch; }
+
+/* The strength filter. Preset chips wrap exactly like the template chips on
+   Lifts: a handful at most, and one tap beats open-scroll-pick on a phone. */
+#strength-presets { display: flex; flex-wrap: wrap; gap: .4rem; margin: .35rem 0 .5rem; }
+#strength-picker { margin: 0 0 .5rem; }
+#strength-picker summary { cursor: pointer; }
+/* Checkbox rows. The label is the toggle target and "only" solos the row —
+   both padded into thumbs, since the picker is useless if it mistaps. */
+#strength-rows .srow {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .3rem 0;
+  border-bottom: 1px solid var(--line);
+}
+#strength-rows label { flex: 1; display: flex; align-items: center; gap: .5rem; }
+#strength-rows input[type="checkbox"] { flex: none; width: 1.1rem; height: 1.1rem; }
+#strength-rows .only {
+  border: 0;
+  background: none;
+  color: var(--dim);
+  padding: .4rem .6rem;
+}
 
 #trend-note { margin: .75rem 0 .25rem; }
 

@@ -8,7 +8,7 @@
 import uPlot from "../vendor/uPlot.esm.js";
 import { parseDay } from "./dates.js";
 import { projection, type CaloriePoint, type HoltPoint, type Sample } from "./estimate.js";
-import type { IndexPoint } from "./lifts.js";
+import type { IndexPoint, LiftPoint } from "./lifts.js";
 
 const DAY_SECONDS = 86_400;
 
@@ -414,7 +414,17 @@ function strengthOptions(width: number): uPlot.Options {
  * daylight between a line and the points it is drawn through reads as a bug
  * rather than as information. The headline carries the fit in words instead.
  */
+/** Which picture the strength slot is showing: the pooled index, or one
+ *  movement's e1RM. The two draw functions share the container, so entering
+ *  one tears down the other — otherwise a mode switch would stack canvases. */
+let strengthMode: "index" | "e1rm" | null = null;
+
 export function drawStrength(el: HTMLElement, index: IndexPoint[], windowDays: number): void {
+  if (strengthMode !== "index") {
+    e1rmPlot?.destroy();
+    e1rmPlot = null;
+    strengthMode = "index";
+  }
   if (index.length < 2) {
     strengthPlot?.destroy();
     strengthPlot = null;
@@ -590,5 +600,125 @@ export function drawCalories(el: HTMLElement, points: CaloriePoint[], windowDays
   new ResizeObserver(() => {
     const w = el.clientWidth;
     if (caloriePlot && w) caloriePlot.setSize({ width: w, height: HEIGHT });
+  }).observe(el);
+}
+
+// ------------------------------------------------------ single-exercise e1RM
+//
+// When the picker narrows to one movement, the pooled index has nothing left
+// to pool — so the chart shows the thing itself: best-set Epley e1RM in kg,
+// one dot per training day. Points only, like the weigh-ins and the intake:
+// each is a noisy sample of the underlying strength, and the days between
+// hold nothing to join up. The headline below does not change shape —
+// panelFit on one series is plain OLS, so the verdict stays the verdict.
+
+let e1rmPlot: uPlot | null = null;
+/** Full data extent, so pan/zoom can be clamped to it. */
+let e1rmBounds: Extent = { min: 0, max: 0 };
+/** Seconds of history the default view opens on, set on every draw — always
+ *  before the plot that reads it through the plugin exists. */
+let e1rmWindow = 0;
+
+/**
+ * The window the basket was built over, so one exercise tells the same
+ * stretch of time the index would have. Everything older is still there; pan
+ * or zoom out to reach it.
+ */
+function e1rmDefaultView(): Extent {
+  return {
+    min: Math.max(e1rmBounds.max - e1rmWindow, e1rmBounds.min),
+    max: e1rmBounds.max,
+  };
+}
+
+/** Shared with the charts above; only the series differ. */
+function e1rmOptions(width: number): uPlot.Options {
+  const c = theme();
+  const axis = {
+    stroke: c.dim,
+    grid: { stroke: c.line, width: 1 },
+    ticks: { stroke: c.line, width: 1 },
+    font: "11px system-ui, sans-serif",
+  };
+
+  return {
+    width,
+    height: HEIGHT,
+    padding: [8, 8, 0, 0],
+    cursor: { drag: { x: false, y: false }, points: { size: 7 } },
+    legend: { show: true, live: true, markers: { show: false } },
+    scales: { x: { time: true } },
+    axes: [
+      { ...axis },
+      { ...axis, size: 44, values: (_u, vals) => vals.map((v) => v.toFixed(1)) },
+    ],
+    series: [
+      {
+        label: "date",
+        value: (_u, v) =>
+          v == null
+            ? "—"
+            : new Date(v * 1000).toLocaleDateString(undefined, {
+                weekday: "short",
+                day: "numeric",
+                month: "short",
+              }),
+      },
+      {
+        // The estimated max itself, in the foreground: this is the thing,
+        // measured with error, where the index was a pooled reading.
+        label: "e1rm",
+        stroke: c.fg,
+        paths: () => null, // points only — best sets are samples, not a line
+        points: { show: true, size: 3.5, stroke: c.fg, fill: c.fg },
+        value: (_u, v) => (v == null ? "—" : `${v.toFixed(1)} kg`),
+      },
+    ],
+    plugins: [panZoom(() => e1rmBounds, e1rmDefaultView)],
+  };
+}
+
+/**
+ * One movement's e1RM trajectory, opening on the window the basket was built
+ * over. Points arrive as log e1RM — the scale the index is fitted on — and
+ * are shown exponentiated, which is the number a lifter recognises.
+ */
+export function drawE1rm(el: HTMLElement, points: LiftPoint[], windowDays: number): void {
+  if (strengthMode !== "e1rm") {
+    strengthPlot?.destroy();
+    strengthPlot = null;
+    strengthMode = "e1rm";
+  }
+  if (points.length < 2) {
+    e1rmPlot?.destroy();
+    e1rmPlot = null;
+    el.replaceChildren();
+    return;
+  }
+
+  const data: uPlot.AlignedData = [points.map(toX), points.map((p) => Math.exp(p.x))];
+
+  const xs = data[0];
+  e1rmBounds = { min: xs[0]!, max: xs[xs.length - 1]! };
+  e1rmWindow = Math.max(windowDays, 1) * DAY_SECONDS;
+
+  const width = el.clientWidth;
+  if (!width) return; // container still hidden; caller redraws on show
+
+  if (e1rmPlot) {
+    // setData re-ranges x to the full extent, so the view has to be reapplied.
+    e1rmPlot.setData(data);
+    e1rmPlot.setSize({ width, height: HEIGHT });
+    e1rmPlot.setScale("x", e1rmDefaultView());
+    return;
+  }
+
+  el.replaceChildren();
+  e1rmPlot = new uPlot(e1rmOptions(width), data, el);
+  e1rmPlot.setScale("x", e1rmDefaultView());
+
+  new ResizeObserver(() => {
+    const w = el.clientWidth;
+    if (e1rmPlot && w) e1rmPlot.setSize({ width: w, height: HEIGHT });
   }).observe(el);
 }

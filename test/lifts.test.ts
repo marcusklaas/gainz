@@ -20,10 +20,13 @@ import {
   newDraft,
   panelFit,
   propagateWeight,
+  selectExercises,
   sessionsOf,
+  singleKey,
   strengthIndex,
   strengthOf,
   summarise,
+  templateExercises,
   templateNames,
   type DatedSession,
   type LiftPoint,
@@ -710,5 +713,67 @@ describe("strengthOf", () => {
     const s = strengthOf(list, on(35), 42);
     assert.deepEqual(s.index, strengthIndex(e1rmPoints(list)));
     assert.ok(s.fit!.perDay > 0, "a history of adding weight every week is progress");
+  });
+});
+
+// ---------------------------------------------------------- picker filtering
+
+describe("selectExercises", () => {
+  const list = [
+    dated(on(0), session({ "Bench Press": [[80, 8]], "Overhead Press": [[47.5, 8]] }, { name: "Push" })),
+    dated(on(2), session({ "Barbell Row": [[70, 8]] }, { name: "Pull" })),
+    dated(on(4), session({ "Bench Press": [[82.5, 8]] }, { name: "Push" })),
+  ];
+
+  it("passes everything through on null", () => {
+    assert.equal(selectExercises(list, null).length, 3);
+  });
+
+  it("keeps only the selected exercises and drops emptied sessions", () => {
+    const out = selectExercises(list, new Set(["bench press"]));
+    assert.equal(out.length, 2);
+    assert.deepEqual(
+      out.map((d) => d.session.exercises.map((e) => e.name)),
+      [["Bench Press"], ["Bench Press"]],
+    );
+  });
+
+  it("matches on the normalised key, not the spelling", () => {
+    const out = selectExercises(list, new Set(["BENCH  press"]));
+    assert.equal(out.length, 2);
+  });
+
+  it("is empty when nothing matches", () => {
+    assert.deepEqual(selectExercises(list, new Set(["squat"])), []);
+  });
+});
+
+describe("templateExercises", () => {
+  const list = [
+    dated(on(0), session({ "Bench Press": [[80, 8]], "Overhead Press": [[47.5, 8]] }, { name: "Push" })),
+    dated(on(2), session({ "Barbell Row": [[70, 8]], "Overhead Press": [[50, 8]] }, { name: "Pull" })),
+  ];
+
+  it("unions the exercises trained under that template", () => {
+    assert.deepEqual(templateExercises(list, "Push"), new Set(["bench press", "overhead press"]));
+  });
+
+  it("lets a movement belong to two templates", () => {
+    assert.ok(templateExercises(list, "Pull").has("overhead press"));
+  });
+
+  it("matches the template name loosely and misses cleanly", () => {
+    assert.deepEqual(templateExercises(list, "push"), templateExercises(list, "Push"));
+    assert.deepEqual(templateExercises(list, "Legs"), new Set());
+  });
+});
+
+describe("singleKey", () => {
+  it("names the one key in the basket and null otherwise", () => {
+    const one = [dated(on(0), session({ Bench: [[80, 8]] })), dated(on(2), session({ bench: [[82.5, 8]] }))];
+    assert.equal(singleKey(one), "bench");
+    const two = [...one, dated(on(4), session({ Row: [[70, 8]] }))];
+    assert.equal(singleKey(two), null);
+    assert.equal(singleKey([]), null);
   });
 });
