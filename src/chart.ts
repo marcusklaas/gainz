@@ -460,10 +460,13 @@ export function drawStrength(el: HTMLElement, index: IndexPoint[], windowDays: n
 // both kcal, which is what makes this mergeable where weight-vs-strength was
 // not.
 //
-// Intake is points joined by segments, not just points: consecutive counted
-// days are readings of one ongoing quantity. uPlot breaks the line wherever
-// the value is null, so unlogged days read as gaps rather than as zeros —
-// the same "empty means not recorded" rule the export prints in words.
+// Intake is points only, like the weigh-ins above — but in the foreground
+// colour, not dimmed. A weigh-in is a noisy sample of a truth that cannot be
+// measured directly (same gut, same hydration); an intake is the thing
+// itself, measured with error. Either way there is no line between two
+// readings, because nothing was measured in between — and a missing day is a
+// missing dot rather than a zero, the same "empty means not recorded" rule
+// the export prints in words.
 
 let caloriePlot: uPlot | null = null;
 /** Full data extent, so pan/zoom can be clamped to it. */
@@ -518,11 +521,13 @@ function calorieOptions(width: number): uPlot.Options {
               }),
       },
       {
-        // What was actually eaten: the foreground line, with a dot on every
-        // counted day so a lone log in a sparse stretch still reads.
+        // What was actually eaten: points only — a counted day is a reading,
+        // and the days between readings hold nothing to join up. Foreground,
+        // not dimmed like the weigh-ins: those sample a truth the scale
+        // cannot see, while this is the thing itself.
         label: "intake",
         stroke: c.fg,
-        width: 1.5,
+        paths: () => null, // points only — counted days are samples, not a line
         points: { show: true, size: 3.5, stroke: c.fg, fill: c.fg },
         value: (_u, v) => (v == null ? "—" : `${v.toFixed(0)} kcal`),
       },
