@@ -26,6 +26,7 @@ import {
   lastSessionNamed,
   moved,
   newDraft,
+  nextUpIndex,
   propagateWeight,
   selectExercises,
   sessionsOf,
@@ -1203,14 +1204,21 @@ $("l-add-form").addEventListener("submit", (e) => {
   const previous = sessions
     .flatMap((s) => s.session.exercises)
     .find((x) => exerciseKey(x.name) === exerciseKey(name));
+  // To the head of the unconfirmed queue, not the foot of the page: the
+  // exercise added mid-session is the one about to be done. editDraft redraws
+  // synchronously, so the block is in the DOM on return and can be brought
+  // into view — otherwise an add from the bottom form would land off-screen
+  // and read as lost. Nearest, not centered: no jump when already visible.
+  const at = nextUpIndex(current()?.exercises ?? []);
   editDraft((d) => {
-    d.exercises.push({
+    d.exercises.splice(at, 0, {
       name,
       sets: previous
         ? previous.sets.map((s) => ({ weight_kg: s.weight_kg, reps: s.reps }))
         : [{ weight_kg: 0, reps: 0 }],
     });
   });
+  $("l-exercises").children[at]?.scrollIntoView({ block: "nearest" });
 });
 
 $("l-save").addEventListener("click", async () => {
