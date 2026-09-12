@@ -607,10 +607,9 @@ export function drawCalories(el: HTMLElement, points: CaloriePoint[], windowDays
 //
 // When the picker narrows to one movement, the pooled index has nothing left
 // to pool — so the chart shows the thing itself: best-set Epley e1RM in kg,
-// one dot per training day. Points only, like the weigh-ins and the intake:
-// each is a noisy sample of the underlying strength, and the days between
-// hold nothing to join up. The headline below does not change shape —
-// panelFit on one series is plain OLS, so the verdict stays the verdict.
+// one dot per training day, joined. The headline below does not change
+// shape — panelFit on one series is plain OLS, so the verdict stays the
+// verdict.
 
 let e1rmPlot: uPlot | null = null;
 /** Full data extent, so pan/zoom can be clamped to it. */
@@ -666,10 +665,12 @@ function e1rmOptions(width: number): uPlot.Options {
       },
       {
         // The estimated max itself, in the foreground: this is the thing,
-        // measured with error, where the index was a pooled reading.
+        // measured with error, where the index was a pooled reading. Dots
+        // joined, like the index above it — one movement's progression is a
+        // line worth following session to session.
         label: "e1rm",
         stroke: c.fg,
-        paths: () => null, // points only — best sets are samples, not a line
+        width: 2,
         points: { show: true, size: 3.5, stroke: c.fg, fill: c.fg },
         value: (_u, v) => (v == null ? "—" : `${v.toFixed(1)} kg`),
       },
