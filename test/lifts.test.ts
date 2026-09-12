@@ -18,6 +18,7 @@ import {
   lastSessionNamed,
   moved,
   newDraft,
+  nextUpIndex,
   panelFit,
   propagateWeight,
   selectExercises,
@@ -775,5 +776,33 @@ describe("singleKey", () => {
     const two = [...one, dated(on(4), session({ Row: [[70, 8]] }))];
     assert.equal(singleKey(two), null);
     assert.equal(singleKey([]), null);
+  });
+});
+
+describe("nextUpIndex", () => {
+  const ex = (done: boolean[]): DraftExercise => ({
+    name: "x",
+    sets: done.map((d) => ({ weight_kg: 80, reps: 8, ...(d ? { done: true } : {}) })),
+  });
+
+  it("lands at the top when nothing is confirmed", () => {
+    assert.equal(nextUpIndex([ex([false]), ex([false])]), 0);
+  });
+
+  it("lands at the bottom when everything is confirmed", () => {
+    assert.equal(nextUpIndex([ex([true]), ex([true, true])]), 2);
+  });
+
+  it("lands below the last confirmed exercise", () => {
+    assert.equal(nextUpIndex([ex([true]), ex([false]), ex([false])]), 1);
+    assert.equal(nextUpIndex([ex([false]), ex([true]), ex([false])]), 2);
+  });
+
+  it("counts an exercise confirmed when any of its sets is", () => {
+    assert.equal(nextUpIndex([ex([false, true]), ex([false])]), 1);
+  });
+
+  it("is empty-safe", () => {
+    assert.equal(nextUpIndex([]), 0);
   });
 });

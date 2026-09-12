@@ -150,6 +150,21 @@ const ghosts = (exercises: Exercise[]): DraftExercise[] =>
     sets: e.sets.map((s) => ({ weight_kg: s.weight_kg, reps: s.reps })),
   }));
 
+/**
+ * Where a just-added exercise lands: below every exercise with a confirmed
+ * set, above the unconfirmed queue. The moment an exercise is added is almost
+ * always the moment it is about to be done, and the queue is the unconfirmed
+ * rest — so the new one goes to the head of it rather than the foot of the
+ * page. Pure, so the editor's submit path and the tests share it.
+ */
+export function nextUpIndex(exercises: DraftExercise[]): number {
+  let at = 0;
+  exercises.forEach((e, i) => {
+    if (e.sets.some((s) => s.done)) at = i + 1;
+  });
+  return at;
+}
+
 /** A new session, prefilled from the last one of that name if there was one. */
 export function newDraft(day: DayKey, at: string, name: string, from: Session | null): Draft {
   return {
