@@ -462,15 +462,18 @@ describe("estimate", () => {
 
   it("converges on measured intake once enough days are logged", () => {
     // Weight dead flat and 2600 kcal eaten every day: whatever the formula says,
-    // the measurement says TDEE is 2600, and full confidence hands it the wheel.
+    // the measurement says TDEE is 2600. The old pipeline stated that as an
+    // algebraic identity; the joint filter approaches it asymptotically, so the
+    // tolerance below is convergence, not arithmetic. All intake counts now —
+    // there is no window — hence countedDays is the whole log.
     const cfg = config({ biasGain: 0 });
     const days = history(60, (i) => ({ ...logged(2600, 2600), weight_kg: 80 }));
     const e = estimate(cfg, days, today)!;
 
-    assert.equal(e.countedDays, cfg.estimator.tdeeWindowDays);
-    close(e.kgPerWeek!, 0, 1e-9);
-    close(e.tdee, 2600, 1e-9);
-    close(e.goalKcal, 2600 + cfg.goal.kcalOffset, 1e-9);
+    assert.equal(e.countedDays, 60);
+    close(e.kgPerWeek!, 0, 1e-6);
+    close(e.tdee, 2600, 1e-3);
+    close(e.goalKcal, e.tdee + cfg.goal.kcalOffset, 1e-9);
   });
 
   it("charges weight change against intake at the fat-equivalent rate", () => {
@@ -488,9 +491,12 @@ describe("estimate", () => {
     close(e.tdee, 2000 + (0.5 * KCAL_PER_KG_FAT) / DAYS_PER_WEEK, 12, "tdee");
   });
 
-  it("blends from formula to measurement in proportion to logged days", () => {
-    const cfg = config({ biasGain: 0, blendFullConfidenceDays: 14 });
-    // Seven logged days out of a fourteen-day confidence horizon: half weight.
+  it("leans from the formula toward the measurement while logging is sparse", () => {
+    // The old pipeline blended by counted-days-over-horizon; the joint filter
+    // carries the same idea as a wide prior that the data overwhelms. Seven
+    // logged days at 2600 should sit far nearer the measurement than the
+    // formula it started from.
+    const cfg = config({ biasGain: 0 });
     const days = history(60, (i) => {
       const weighed = { items: [], weight_kg: 80 } as Day;
       return i >= 52 && i < 59 ? { ...logged(2600, 2600), weight_kg: 80 } : weighed;
@@ -499,20 +505,39 @@ describe("estimate", () => {
     const formula = mifflinBmr(cfg.bio, e.trendKg, today) * cfg.estimator.activityFactor;
 
     assert.equal(e.countedDays, 7);
-    close(e.tdee, 0.5 * 2600 + 0.5 * formula, 1e-6);
+    assert.ok(Math.abs(e.tdee - 2600) < Math.abs(formula - 2600), `tdee ${e.tdee} should beat formula ${formula} toward 2600`);
   });
 
-  it("never lets today move today's own target", () => {
-    // Today is excluded from the fit even when ticked, so the bias accumulator
-    // cannot be fed by the meal you are about to log against it.
+  it("never lets today's food move today's own target", () => {
+    // Today is excluded from the intake fit even when ticked, so the bias
+    // accumulator cannot be fed by the meal you are about to log against it —
+    // and the filter inputs are bit-identical, so the number cannot move.
     const cfg = config();
     const base = history(60, () => ({ ...logged(2600, 2600), weight_kg: 80 }));
-    const withToday = new Map(base).set(today, { ...logged(9000, 2600), weight_kg: 80 });
+    const withToday = new Map(base).set(today, { ...logged(9000, 2600) });
 
     const a = estimate(cfg, base, today)!;
     const b = estimate(cfg, withToday, today)!;
     close(b.targetKcal, a.targetKcal, 1e-9);
     close(b.tdee, a.tdee, 1e-9);
+    assert.equal(b.countedDays, a.countedDays);
+  });
+
+  it("does let today's weigh-in move the trend", () => {
+    // The morning weigh-in is finished data, unlike the day's food: it enters
+    // the filter, so the trend answers it. On a dead-flat history the move is
+    // tiny but nonzero — a smoother that ignored a real reading would be broken.
+    const cfg = config();
+    const base = history(60, () => ({ ...logged(2600, 2600), weight_kg: 80 }));
+    const withWeighIn = new Map(base).set(today, {
+      ...logged(9000, 2600),
+      weight_kg: 80,
+    });
+
+    const a = estimate(cfg, base, today)!;
+    const b = estimate(cfg, withWeighIn, today)!;
+    assert.ok(b.tdee !== a.tdee, "a fresh weigh-in must move the filter");
+    assert.ok(Math.abs(b.tdee - a.tdee) < 1e-3, "on flat data the move is a whisper");
     assert.equal(b.countedDays, a.countedDays);
   });
 

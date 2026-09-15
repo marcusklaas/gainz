@@ -27,15 +27,10 @@ export const FIELDS: readonly Field[] = [
   ["b-sex", "bio.sex", "m"],
 
   ["e-activity", "estimator.activityFactor", 1.4],
-  // Six days each. The old 10/28 was chosen when only the level was read, and a
-  // 28-day trend half-life does draw a beautifully smooth line — but the slope
-  // behind it takes months to catch a rate that changed. Now that TDEE is
-  // derived from that slope, the lag is the whole ballgame: on a dead-steady
-  // -0.5 kg/week it still read -0.39 after sixty days, a 22% undercount worth
-  // about 120 kcal/day. Six catches a real change inside a fortnight, and is
-  // what this deployment's own config has been running regardless.
-  ["e-level", "estimator.levelHalfLifeDays", 6],
-  ["e-trend", "estimator.trendHalfLifeDays", 6],
+  // No smoother knobs: the joint filter fits its own hyperparameters on every
+  // load. levelHalfLifeDays, trendHalfLifeDays and blendFullConfidenceDays
+  // stay in the config shape (stored configs may carry them) but nothing reads
+  // them anymore.
   ["e-history", "estimator.historyDays", 180],
   // A week. Long enough that the tangent has a visible gradient at any sane
   // chart span, short enough to stay inside the horizon the slope is actually
@@ -43,7 +38,6 @@ export const FIELDS: readonly Field[] = [
   // longer than that is extrapolating a rate from data older than the forecast.
   ["e-projection", "estimator.projectionDays", 7],
   ["e-window", "estimator.tdeeWindowDays", 21],
-  ["e-confidence", "estimator.blendFullConfidenceDays", 14],
   ["e-bias-gain", "estimator.biasGain", 0.3],
   ["e-bias-leak", "estimator.biasLeak", 0.96],
   ["e-bias-max", "estimator.biasMaxKcal", 900],

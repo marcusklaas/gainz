@@ -19,11 +19,12 @@ import {
   dayKcal,
   dayProtein,
   estimate,
-  holtSeries,
+  hyperScope,
+  tissueAt,
   WEEK_DAYS,
   weekSummary,
-  weightSamples,
   type Estimate,
+  type HyperScope,
 } from "./estimate.js";
 import {
   e1rmPoints,
@@ -144,9 +145,14 @@ function span(days: Map<DayKey, Day>, from: DayKey, to: DayKey): [DayKey, Day][]
  * stamped on every row — a distinction the reader cannot make for itself, so
  * getting it wrong would quietly invent an adaptation story.
  */
-function estimateAt(cfg: Config, days: Map<DayKey, Day>, upto: DayKey): Estimate | null {
+function estimateAt(
+  cfg: Config,
+  days: Map<DayKey, Day>,
+  upto: DayKey,
+  scope: HyperScope,
+): Estimate | null {
   const sub = new Map([...days.entries()].filter(([k]) => k <= upto));
-  return estimate(cfg, sub, addDays(upto, 1));
+  return estimate(cfg, sub, addDays(upto, 1), scope.at(upto));
 }
 
 /** Monday of the week `day` falls in. */
@@ -180,7 +186,7 @@ function rollup(
   days: Map<DayKey, Day>,
   p: Period,
   today: DayKey,
-  trend: Map<DayKey, number>,
+  scope: HyperScope,
   index: IndexPoint[],
 ): Rollup {
   const half = cfg.goal.kcalWindow / 2;
@@ -202,12 +208,14 @@ function rollup(
     if (d.goal_kcal !== undefined && Math.abs(kcal - d.goal_kcal) <= half) inBand++;
   }
 
+  const end = p.to <= today ? p.to : today;
+  const est = estimateAt(cfg, days, end, scope);
+
   // Smoothed weight, not the raw scale reading: the endpoints of a period are
   // otherwise two arbitrary weigh-ins and their difference is mostly water.
-  const weights = inRange.map(([k]) => trend.get(k)).filter((x): x is number => x !== undefined);
-
-  const end = p.to <= today ? p.to : today;
-  const est = estimateAt(cfg, days, end);
+  // From the row's own estimate, so the endpoints see nothing after the row.
+  const inDays = new Set(inRange.map(([k]) => k));
+  const weights = (est?.trendLine ?? []).filter((s) => inDays.has(s.day)).map((s) => s.kg);
 
   return {
     complete: kcals.length,
@@ -244,9 +252,10 @@ function preamble(cfg: Config, today: DayKey, generatedAt: string): string {
     `- Calorie goal: estimated TDEE ${g.kcalOffset >= 0 ? "+" : ""}${g.kcalOffset} kcal (a ${direction}),` +
       ` with a ${g.kcalWindow} kcal band around it — ±${g.kcalWindow / 2}.`,
     `- Protein goal: ${g.proteinGPerKg} g per kg of smoothed body weight.`,
-    `- TDEE is fitted over ${e.tdeeWindowDays} days and fully trusted at` +
-      ` ${e.blendFullConfidenceDays} counted days; below that it is blended with a` +
-      ` Mifflin–St Jeor estimate at activity factor ${e.activityFactor}.`,
+    `- TDEE is a latent state in a joint weight/intake Kalman filter` +
+      ` (tissue driven by (intake − TDEE)/7700, zero-mean water transient,` +
+      ` slow TDEE random walk), fitted by maximum likelihood on the intake era` +
+      ` and anchored on a Mifflin–St Jeor prior at activity factor ${e.activityFactor}.`,
     `- The strength verdict is fitted over ${cfg.strength.windowDays} days.`,
     "",
     "## How to read this",
@@ -260,10 +269,11 @@ function preamble(cfg: Config, today: DayKey, generatedAt: string): string {
     "- `tdee` is re-derived at each row's own date, from data up to that date only.",
     "  Reading down the column is therefore a trajectory: it shows metabolic",
     "  adaptation and logging quality changing over time, not one number repeated.",
-    "- `kg_per_wk` is an OLS fit of weigh-ins over the estimator window ending at",
-    `  that row, so it lags a turn by about ${Math.round(e.tdeeWindowDays / 2)} days.`,
-    "- `weight_trend_kg` is Holt-smoothed, not the scale reading. It exists only on",
-    "  days that were weighed.",
+    "- `kg_per_wk` is the filter's implied drift ((intake − TDEE)/7700) at" +
+      "  that row — the tangent to the drawn curve, not a trailing window.",
+    "- `weight_trend_kg` is filtered tissue weight, not the scale reading:" +
+      "  water and scale noise are split out, so endpoints are not two" +
+      "  arbitrary weigh-ins.",
     "- `in_band_days` is measured against that day's stored `goal_kcal`. The band",
     "  actually shown in the app is shifted by a slow bias correction, so the two",
     "  can differ while intake is persistently off target.",
@@ -286,8 +296,8 @@ function preamble(cfg: Config, today: DayKey, generatedAt: string): string {
   ].join("\n");
 }
 
-function now(cfg: Config, days: Map<DayKey, Day>, today: DayKey): string {
-  const est = estimate(cfg, days, today);
+function now(cfg: Config, days: Map<DayKey, Day>, today: DayKey, scope: HyperScope): string {
+  const est = estimate(cfg, days, today, scope.fresh(today));
   const list = sessionsOf(days);
   const s = strengthOf(list, today, cfg.strength.windowDays);
   const w = weekSummary(days, today, est?.proteinTarget ?? null);
@@ -300,7 +310,7 @@ function now(cfg: Config, days: Map<DayKey, Day>, today: DayKey): string {
           ? ", rate not yet measurable"
           : `, moving ${est.kgPerWeek >= 0 ? "+" : ""}${est.kgPerWeek.toFixed(2)} kg/week`),
       `- TDEE ${Math.round(est.tdee)} kcal` +
-        `, from ${est.countedDays} counted days in the last ${est.windowDays}`,
+        `, from ${est.countedDays} counted days (joint filter, all intake)`,
       `- Today's band ${Math.round(est.kcalLower)}–${Math.round(est.kcalUpper)} kcal;` +
         ` uncorrected goal ${Math.round(est.goalKcal)}, bias ${est.bias.kcal >= 0 ? "+" : ""}${Math.round(est.bias.kcal)} kcal over ${est.bias.days} counted days`,
       `- Protein target ${Math.round(est.proteinTarget)} g/day`,
@@ -338,7 +348,7 @@ function weekly(
   cfg: Config,
   days: Map<DayKey, Day>,
   today: DayKey,
-  trend: Map<DayKey, number>,
+  scope: HyperScope,
   index: IndexPoint[],
 ): string {
   const rows: string[] = [];
@@ -346,7 +356,7 @@ function weekly(
 
   for (let from = first; from <= today; from = addDays(from, 7)) {
     const p: Period = { from, to: addDays(from, 6) };
-    const r = rollup(cfg, days, p, today, trend, index);
+    const r = rollup(cfg, days, p, today, scope, index);
     rows.push(
       row(
         from,
@@ -375,7 +385,7 @@ function monthly(
   cfg: Config,
   days: Map<DayKey, Day>,
   today: DayKey,
-  trend: Map<DayKey, number>,
+  scope: HyperScope,
   index: IndexPoint[],
 ): string {
   const rows: string[] = [];
@@ -390,7 +400,7 @@ function monthly(
     const from = toDayKey(start);
     const to = toDayKey(new Date(start.getFullYear(), start.getMonth() + 1, 0));
     if (to < first) continue;
-    const r = rollup(cfg, days, { from, to }, today, trend, index);
+    const r = rollup(cfg, days, { from, to }, today, scope, index);
     rows.push(
       row(
         monthOf(from),
@@ -414,14 +424,14 @@ function monthly(
   );
 }
 
-function daily(days: Map<DayKey, Day>, today: DayKey, trend: Map<DayKey, number>): string {
+function daily(cfg: Config, days: Map<DayKey, Day>, today: DayKey, scope: HyperScope): string {
   const from = addDays(today, -(WINDOW.dailyDays - 1));
   const rows = span(days, from, today).map(([k, d]) =>
     row(
       k,
       parseDay(k).toLocaleDateString("en-US", { weekday: "short" }),
       n(d.weight_kg, 1),
-      n(trend.get(k), 1),
+      n(tissueAt(cfg, days, k, scope.at(k)), 1),
       d.items.length ? n(dayKcal(d)) : "",
       d.items.length ? n(dayProtein(d)) : "",
       n(d.goal_kcal),
@@ -540,24 +550,22 @@ export interface ContextOptions {
 export function buildContext(cfg: Config, days: Map<DayKey, Day>, o: ContextOptions): string {
   const { today, generatedAt } = o;
 
-  // Computed once and threaded through: the smoothed weight on every weigh-in
-  // day, and the strength index over every training day.
-  const trend = new Map(
-    holtSeries(weightSamples(days), cfg.estimator.levelHalfLifeDays, cfg.estimator.trendHalfLifeDays)
-      .map((s) => [s.day, s.kg] as const),
-  );
+  // Computed once and threaded through: one replay scope, so every row fits
+  // on data up to its own end (strided — a reused fit still ends at or
+  // before its row), plus the strength index over every training day.
+  const scope = hyperScope(cfg, days, 14);
   const list = sessionsOf(days);
   const points = e1rmPoints(list);
   const index = strengthIndex(points);
 
   return [
     preamble(cfg, today, generatedAt),
-    now(cfg, days, today),
-    weekly(cfg, days, today, trend, index),
-    daily(days, today, trend),
+    now(cfg, days, today, scope),
+    weekly(cfg, days, today, scope, index),
+    daily(cfg, days, today, scope),
     food(days, today),
     sessions(list, today),
     exercises(points),
-    monthly(cfg, days, today, trend, index),
+    monthly(cfg, days, today, scope, index),
   ].join("\n");
 }

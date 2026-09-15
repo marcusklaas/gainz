@@ -4,12 +4,19 @@
 import { addDays, daysBetween } from "./dates.js";
 import {
   DAYS_PER_WEEK,
-  KCAL_PER_KG_FAT,
   MIFFLIN,
   type Config,
   type Day,
   type DayKey,
 } from "./types.js";
+import {
+  DEFAULT_HYPER,
+  filterJoint,
+  fitJoint,
+  inputsFor,
+  type JointHyper,
+  type JointInputs,
+} from "./joint3.js";
 
 export interface Sample {
   day: DayKey;
@@ -287,65 +294,205 @@ export function weekSummary(
   return w;
 }
 
+/**
+ * The TDEE prior: Mifflin-St Jeor off the first weighed day of the intake
+ * era, times the activity factor — the same anchor the old blend faded
+ * toward, now stated once as a wide prior instead of a schedule. Before any
+ * intake exists nothing is observable, so it falls back to the first weight
+ * overall and the filter simply coasts there.
+ */
+function priorE0(cfg: Config, inputs: JointInputs, today: DayKey): number {
+  const { weight, counted, start } = inputs;
+  const firstCounted = counted.findIndex((c) => c !== null);
+  let wEra: number | null = null;
+  let ageDay: DayKey = today;
+  if (firstCounted !== -1) {
+    ageDay = addDays(start, firstCounted);
+    for (let j = firstCounted; j < weight.length; j++) {
+      const wj = weight[j] ?? null;
+      if (wj !== null) {
+        wEra = wj;
+        break;
+      }
+    }
+  }
+  if (wEra === null) {
+    for (const w of weight) {
+      if (w !== null) {
+        wEra = w;
+        break;
+      }
+    }
+  }
+  return mifflinBmr(cfg.bio, wEra ?? 80, ageDay) * cfg.estimator.activityFactor;
+}
+
+/**
+ * Hyperparameters fitted on the data given — the "fit on app start" step,
+ * hoisted out so loops over truncated histories (calorieSeries, the export)
+ * fit once on the enclosing dataset and pass the result down instead of
+ * refitting per row. The fit itself only sets three global smoothness
+ * scalars; every level below stays causal, the same split the analysis
+ * notebooks use (fit once, filter causally).
+ */
+export function fitHyperFor(cfg: Config, days: Map<DayKey, Day>, today: DayKey): JointHyper {
+  const keys = [...days.keys()].sort();
+  if (!keys.length) return { ...DEFAULT_HYPER };
+  const inputs = inputsFor(days, keys[keys.length - 1]!, today);
+  if (!inputs) return { ...DEFAULT_HYPER };
+  return fitJoint(inputs.weight, inputs.counted, priorE0(cfg, inputs, today)).hyper;
+}
+
+// Re-exported for callers that fit once and thread the result through.
+export { DEFAULT_HYPER as defaultJointHyper } from "./joint3.js";
+
+/**
+ * Causal replay scope: hyperparameters fitted on data up to each row's own
+ * end, never after it. A row that saw the future would quietly invent an
+ * adaptation story, so replays (chart trajectory, export rows) resolve every
+ * row through here instead of sharing one fit from the enclosing dataset.
+ * The fit itself only sets three global smoothness scalars; the filter below
+ * it stays per-row causal either way.
+ *
+ * One scope per pass — it is not kept across renders, so logged data can
+ * never go stale inside it. `strideDays` lets long trajectories (the chart)
+ * reuse a fit for a few days rather than refitting every row; the export
+ * leaves it at 0 and fits every row fresh.
+ */
+export interface HyperScope {
+  at(end: DayKey): JointHyper;
+  /** Always fits on data up to `end`: for headlines, which deserve the best
+   *  fit rather than a strided reuse. */
+  fresh(end: DayKey): JointHyper;
+}
+
+export function hyperScope(cfg: Config, days: Map<DayKey, Day>, strideDays = 0): HyperScope {
+  const cache = new Map<DayKey, JointHyper>();
+  let lastFitEnd: DayKey | null = null;
+  let lastFit: JointHyper | null = null;
+  const fit = (end: DayKey): JointHyper => {
+    const sub = new Map([...days.entries()].filter(([k]) => k <= end));
+    return fitHyperFor(cfg, sub, addDays(end, 1));
+  };
+  return {
+    at(end: DayKey): JointHyper {
+      const hit = cache.get(end);
+      if (hit) return hit;
+      if (
+        strideDays > 0 &&
+        lastFitEnd !== null &&
+        lastFit !== null &&
+        end >= lastFitEnd &&
+        daysBetween(lastFitEnd, end) < strideDays
+      ) {
+        cache.set(end, lastFit);
+        return lastFit;
+      }
+      const h = fit(end);
+      cache.set(end, h);
+      lastFitEnd = end;
+      lastFit = h;
+      return h;
+    },
+    fresh(end: DayKey): JointHyper {
+      const h = fit(end);
+      cache.set(end, h);
+      lastFitEnd = end;
+      lastFit = h;
+      return h;
+    },
+  };
+}
+
+/**
+ * Filtered tissue weight on one day, from data up to that day only — the
+ * daily column. Hyperparameters come from the pass's scope, so the row sees
+ * nothing recorded after it.
+ */
+export function tissueAt(
+  cfg: Config,
+  days: Map<DayKey, Day>,
+  day: DayKey,
+  hyper?: JointHyper,
+): number | null {
+  const sub = new Map([...days.entries()].filter(([k]) => k <= day));
+  const keys = [...sub.keys()].sort();
+  if (!keys.length) return null;
+  const inputs = inputsFor(sub, keys[keys.length - 1]!, addDays(day, 1));
+  if (!inputs) return null;
+  const e0 = priorE0(cfg, inputs, addDays(day, 1));
+  const h = hyper ?? fitJoint(inputs.weight, inputs.counted, e0).hyper;
+  const { states } = filterJoint(inputs.weight, inputs.counted, e0, h);
+  const i = daysBetween(inputs.start, day);
+  return states[i]?.tissue ?? null;
+}
+
 /** Null until at least one weight exists — there is no basis for a target without it. */
-export function estimate(cfg: Config, days: Map<DayKey, Day>, today: DayKey): Estimate | null {
+export function estimate(
+  cfg: Config,
+  days: Map<DayKey, Day>,
+  today: DayKey,
+  hyper?: JointHyper,
+): Estimate | null {
   const e = cfg.estimator;
   const samples = weightSamples(days);
-  const trendLine = holtSeries(samples, e.levelHalfLifeDays, e.trendHalfLifeDays);
-  const last = trendLine[trendLine.length - 1];
-  if (last === undefined) return null;
+  if (!samples.length) return null;
+  // Weights are read through the last weigh-in in the map — the morning
+  // weigh-in moves today's trend — while intake stops before today, which is
+  // still in progress and would drag its own target down. That split is also
+  // what gives the bias accumulator its free property: today's target is built
+  // from earlier days only, so logging food cannot move it.
+  const end = samples[samples.length - 1]!.day;
+  const inputs = inputsFor(days, end, today);
+  if (!inputs) return null;
+  const e0 = priorE0(cfg, inputs, today);
+  const h = hyper ?? fitJoint(inputs.weight, inputs.counted, e0).hyper;
+  const { states } = filterJoint(inputs.weight, inputs.counted, e0, h);
+  const at = (i: number) => states[i]!;
+
+  // One trend point per weigh-in, as before: tissue is the drawn line and the
+  // implied drift beside it is its tangent, so the rate shown is the gradient
+  // of the curve drawn.
+  const trendLine: HoltPoint[] = [];
+  for (const s of samples) {
+    const i = daysBetween(inputs.start, s.day);
+    const st = at(i);
+    trendLine.push({ day: s.day, kg: st.tissue, slope: st.slope });
+  }
+  const last = trendLine[trendLine.length - 1]!;
   const trendKg = last.kg;
 
-  const from = addDays(today, -e.tdeeWindowDays);
   const bmr = mifflinBmr(cfg.bio, trendKg, today);
-  const formulaTdee = bmr * e.activityFactor;
 
-  // Today is excluded even if it has already been ticked — a day still in
-  // progress would drag the average down hard. It also gives the bias
-  // accumulator the property it needs for free: today's target is built from
-  // earlier days only, so logging food cannot move it.
-  //
-  // One pass, oldest first, over every day that counts. The bias fold wants all
-  // of it — with a ~17-day half-life a 21-day fold would still be climbing out
-  // of its zero start when it reported a number — and the TDEE window is that
-  // same list from `from` onwards.
+  // One pass, oldest first, over every day that counts. Unchanged: the bias
+  // fold wants all of it — with a ~17-day half-life a short fold would still
+  // be climbing out of its zero start when it reported a number.
   const counted: Counted[] = [];
   for (const d of [...days.keys()].sort()) {
     if (d >= today) continue;
     const kcal = countedKcal(days.get(d));
     if (kcal !== null) counted.push({ day: d, kcal, goal: days.get(d)!.goal_kcal });
   }
-  const inWindow = counted.filter((c) => c.day >= from);
-
-  const avgIntake = inWindow.length
-    ? inWindow.reduce((a, c) => a + c.kcal, 0) / inWindow.length
-    : null;
-  const measuredTdee = avgIntake === null ? null : avgIntake - last.slope * KCAL_PER_KG_FAT;
-
-  // Blend toward the measured value as logged days accumulate. Covers the cold
-  // start, vacations, and any stretch of poor logging.
-  const w = measuredTdee === null ? 0 : Math.min(inWindow.length / e.blendFullConfidenceDays, 1);
-  const tdee = w * (measuredTdee ?? 0) + (1 - w) * formulaTdee;
 
   // The band keeps its width; only its centre moves. The goal is what today is
   // judged against and what gets recorded — never the shifted target, which
   // would make the correction cancel itself out the moment it took effect.
-  const goalKcal = tdee + cfg.goal.kcalOffset;
+  const goal = at(states.length - 1)!.tdee + cfg.goal.kcalOffset;
   const half = cfg.goal.kcalWindow / 2;
   const bias = accumulate(counted, e);
-  const targetKcal = correctedTarget(goalKcal, bias.kcal, bmr, e.biasGain);
+  const targetKcal = correctedTarget(goal, bias.kcal, bmr, e.biasGain);
 
   return {
     samples,
     trendLine,
     trendKg,
     kgPerWeek: samples.length < 2 ? null : last.slope * DAYS_PER_WEEK,
-    tdee,
-    countedDays: inWindow.length,
+    tdee: at(states.length - 1)!.tdee,
+    countedDays: counted.length,
     windowDays: e.tdeeWindowDays,
     kcalLower: targetKcal - half,
     kcalUpper: targetKcal + half,
-    goalKcal,
+    goalKcal: goal,
     targetKcal,
     bias,
     proteinTarget: trendKg * cfg.goal.proteinGPerKg,
@@ -384,12 +531,18 @@ export function calorieSeries(
   windowDays: number,
 ): CaloriePoint[] {
   const from = addDays(today, -(Math.max(windowDays, 1) - 1));
+  // One scope for the whole trajectory: every row fits on data up to its own
+  // end (stride reuses a fit for a few days — all of it still at or before
+  // the row), except the last, which fits fresh so it agrees bit-for-bit with
+  // a direct estimate on the same data.
+  const scope = hyperScope(cfg, days, 7);
   const out: CaloriePoint[] = [];
   for (let d = from; d <= today; d = addDays(d, 1)) {
     const sub = new Map([...days.entries()].filter(([k]) => k <= d));
+    const hyper = d === today ? fitHyperFor(cfg, sub, addDays(d, 1)) : scope.at(d);
     // Tomorrow's frame over today's data: the day in question counts as
     // finished, exactly as estimateAt does for the export.
-    const est = estimate(cfg, sub, addDays(d, 1));
+    const est = estimate(cfg, sub, addDays(d, 1), hyper);
     out.push({ day: d, kcal: countedKcal(days.get(d)), tdee: est?.tdee ?? null });
   }
   // Leading nothing — before the first weigh-in there is no TDEE, and before
