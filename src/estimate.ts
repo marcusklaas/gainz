@@ -347,62 +347,11 @@ export function fitHyperFor(cfg: Config, days: Map<DayKey, Day>, today: DayKey):
 export { DEFAULT_HYPER as defaultJointHyper } from "./joint3.js";
 
 /**
- * Causal replay scope: hyperparameters fitted on data up to each row's own
- * end, never after it. A row that saw the future would quietly invent an
- * adaptation story, so replays (chart trajectory, export rows) resolve every
- * row through here instead of sharing one fit from the enclosing dataset.
- * The fit itself only sets three global smoothness scalars; the filter below
- * it stays per-row causal either way.
- *
- * One scope per pass — it is not kept across renders, so logged data can
- * never go stale inside it. `strideDays` lets long trajectories (the chart)
- * reuse a fit for a few days rather than refitting every row; the export
- * leaves it at 0 and fits every row fresh.
+ * Fit-once discipline: hyperparameters are fitted on the enclosing dataset
+ * and every row below filters with them. That means an old row can move when
+ * later days arrive (smoothness is global), while every level stays causally
+ * filtered — history rewrites, by decision, not by accident.
  */
-export interface HyperScope {
-  at(end: DayKey): JointHyper;
-  /** Always fits on data up to `end`: for headlines, which deserve the best
-   *  fit rather than a strided reuse. */
-  fresh(end: DayKey): JointHyper;
-}
-
-export function hyperScope(cfg: Config, days: Map<DayKey, Day>, strideDays = 0): HyperScope {
-  const cache = new Map<DayKey, JointHyper>();
-  let lastFitEnd: DayKey | null = null;
-  let lastFit: JointHyper | null = null;
-  const fit = (end: DayKey): JointHyper => {
-    const sub = new Map([...days.entries()].filter(([k]) => k <= end));
-    return fitHyperFor(cfg, sub, addDays(end, 1));
-  };
-  return {
-    at(end: DayKey): JointHyper {
-      const hit = cache.get(end);
-      if (hit) return hit;
-      if (
-        strideDays > 0 &&
-        lastFitEnd !== null &&
-        lastFit !== null &&
-        end >= lastFitEnd &&
-        daysBetween(lastFitEnd, end) < strideDays
-      ) {
-        cache.set(end, lastFit);
-        return lastFit;
-      }
-      const h = fit(end);
-      cache.set(end, h);
-      lastFitEnd = end;
-      lastFit = h;
-      return h;
-    },
-    fresh(end: DayKey): JointHyper {
-      const h = fit(end);
-      cache.set(end, h);
-      lastFitEnd = end;
-      lastFit = h;
-      return h;
-    },
-  };
-}
 
 /**
  * Filtered tissue weight on one day, from data up to that day only — the
@@ -531,15 +480,11 @@ export function calorieSeries(
   windowDays: number,
 ): CaloriePoint[] {
   const from = addDays(today, -(Math.max(windowDays, 1) - 1));
-  // One scope for the whole trajectory: every row fits on data up to its own
-  // end (stride reuses a fit for a few days — all of it still at or before
-  // the row), except the last, which fits fresh so it agrees bit-for-bit with
-  // a direct estimate on the same data.
-  const scope = hyperScope(cfg, days, 7);
+  // Fit once on the enclosing dataset; every row filters with it.
+  const hyper = fitHyperFor(cfg, days, addDays(today, 1));
   const out: CaloriePoint[] = [];
   for (let d = from; d <= today; d = addDays(d, 1)) {
     const sub = new Map([...days.entries()].filter(([k]) => k <= d));
-    const hyper = d === today ? fitHyperFor(cfg, sub, addDays(d, 1)) : scope.at(d);
     // Tomorrow's frame over today's data: the day in question counts as
     // finished, exactly as estimateAt does for the export.
     const est = estimate(cfg, sub, addDays(d, 1), hyper);
