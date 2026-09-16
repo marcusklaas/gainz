@@ -826,8 +826,7 @@ function renderGoals(d: Day, est: Estimate | null): void {
         : `${round(est.kcalLower - kcal)} more to reach range · ${round(est.kcalUpper - kcal)} to spare`;
 
   // Today carries only what bears on today's targets; the trend lives on Trend.
-  $("stats").textContent =
-    `TDEE ${round(est.tdee)} · from ${est.countedDays} of ${est.windowDays} days`;
+  $("stats").textContent = `TDEE ${round(est.tdee)}`;
 
   $("trend-note").textContent =
     est.kgPerWeek === null
