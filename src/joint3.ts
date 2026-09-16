@@ -327,9 +327,10 @@ export interface JointFit {
   nEra: number;
 }
 
-/** Fit (qTdee, qWater, phi) by MLE on the intake era. Deterministic: fixed
- *  starts, no randomness — the same history always fits the same numbers,
- *  which is what lets per-day replays agree with the headline estimate. */
+/** Fit (qTdee, qWater, phi) on the intake era: maximum likelihood plus a weak
+ *  MAP prior toward DEFAULT_HYPER (see `neg`). Deterministic: fixed starts,
+ *  no randomness — the same history always fits the same numbers, which is
+ *  what lets per-day replays agree with the headline estimate. */
 export function fitJoint(
   weight: (number | null)[],
   counted: (number | null)[],
@@ -350,9 +351,23 @@ export function fitJoint(
   if (era0 === -1 || nEra < 8) {
     return { hyper: { ...DEFAULT_HYPER }, loglik: -Infinity, nEra };
   }
+  // Weak MAP prior toward DEFAULT_HYPER, 1 nat sd per component: with a
+  // handful of era readings the likelihood is ridge-flat and the optimiser
+  // wanders to frozen-TDEE boundaries (qTdee -> 0 parks TDEE at an
+  // overcorrected level — the early-August rows read ~1650 that way); with a
+  // full era the penalty costs ~nothing. Prior is constant, so every replay
+  // row stays causal.
+  const t0 = [
+    Math.log(DEFAULT_HYPER.qTdee),
+    Math.log(DEFAULT_HYPER.qWater),
+    Math.log(DEFAULT_HYPER.phi / (1 - DEFAULT_HYPER.phi)),
+  ];
   const neg = (theta: number[]): number => {
     const ll = eraLoglik(weight, counted, e0, unpack(theta), rho);
-    return Number.isFinite(ll) ? -ll : 1e12;
+    if (!Number.isFinite(ll)) return 1e12;
+    const pen =
+      (theta[0]! - t0[0]!) ** 2 + (theta[1]! - t0[1]!) ** 2 + (theta[2]! - t0[2]!) ** 2;
+    return -ll + pen / 2;
   };
   const seed: [number, number, number] = [-0.5, -3.0, 0.0];
   const starts: number[][] = [
@@ -367,5 +382,8 @@ export function fitJoint(
     const r = nelderMead(neg, s);
     if (r.fx < best.fx) best = r;
   }
-  return { hyper: unpack(best.x), loglik: -best.fx, nEra };
+  const hyper = unpack(best.x);
+  // Pure era log-likelihood, without the MAP penalty, so it stays comparable
+  // across fits.
+  return { hyper, loglik: eraLoglik(weight, counted, e0, hyper, rho), nEra };
 }

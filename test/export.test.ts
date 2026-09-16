@@ -239,7 +239,14 @@ describe("counting", () => {
     assert.ok(late > early + 300, `TDEE tracked the change: ${early} -> ${late}`);
   });
 
-  it("never lets a row see data recorded after it", () => {
+  it("fits once, so an old row may move when later days arrive", () => {
+    // Fit-once discipline, by decision: hyperparameters are fitted on the
+    // enclosing dataset and every row filters with them. Levels stay causal,
+    // but smoothness is global — a volatile fortnight refits it, and old rows
+    // move. The old strict-invariance test asserted the opposite and was
+    // replaced with this one when the per-row refits were removed: they were
+    // causally pure and 4.5 seconds slow on a real history, and they collapsed
+    // on short intake eras (early-August rows read ~1650 that way).
     const base = history(60, { kcal: 2200, goal: 2200 });
     const doc = build(base);
 
@@ -251,8 +258,17 @@ describe("counting", () => {
     const later = build(extended);
 
     const week = (doc: string, i: number) => cols(table(doc, "Weekly").at(i)!);
-    assert.deepEqual(week(doc, -4), week(later, -4), "an older week is untouched by newer days");
     assert.notDeepEqual(week(doc, -1), week(later, -1), "the current week did move");
+    assert.deepEqual(build(extended), later, "the rewrite is stable, not flickering");
+    // Bound the rewrite: inputs never move, and the estimates may shift with
+    // the shared fit but must not explode. ~145 kcal here under a deliberately
+    // adversarial fortnight; steady-state use moves single digits.
+    assert.deepEqual(week(doc, -4).slice(0, 5), week(later, -4).slice(0, 5), "inputs are history");
+    const tdee = (w: string[]) => Number(w[7]);
+    assert.ok(
+      Math.abs(tdee(week(later, -4)) - tdee(week(doc, -4))) < 200,
+      "old-row TDEE moves with the fit, boundedly",
+    );
   });
 });
 

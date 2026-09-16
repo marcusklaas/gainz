@@ -91,10 +91,16 @@ describe("filterJoint", () => {
     const dWater = spike.water - before.water;
     assert.ok(dWater > 2 * dTissue, `water ${dWater} should dwarf tissue ${dTissue}`);
     // The TDEE channel does answer the surprise — joint inference cuts both
-    // ways — but the move is transient: ordinary days walk it back, so the
-    // calorie target is not permanently repriced by one salty meal.
+    // ways, ~130 kcal here at production-like drift — but the move is
+    // transient: ordinary days walk most of it back, so the calorie target is
+    // not permanently repriced by one salty meal. Pinned as a ratio, so the
+    // bound survives hyperparameter changes.
+    const impact = Math.abs(spike.tdee - before.tdee);
     const later = states[45]!;
-    assert.ok(Math.abs(later.tdee - before.tdee) < 10, `TDEE should recover, got ${later.tdee}`);
+    assert.ok(
+      Math.abs(later.tdee - before.tdee) < 0.25 * impact,
+      `TDEE residual ${later.tdee - before.tdee} should be < 1/4 of impact ${impact}`,
+    );
   });
 
   it("charges a steady loss against intake at the fat-equivalent rate", () => {
@@ -129,6 +135,24 @@ describe("fitJoint", () => {
     assert.ok(a.hyper.phi > 0 && a.hyper.phi < 1, `phi ${a.hyper.phi}`);
     assert.ok(a.hyper.qTdee > 0 && a.hyper.qWater > 0);
     assert.ok(Number.isFinite(a.loglik));
+  });
+
+  it("does not freeze TDEE on a short intake era", () => {
+    // Ten logged days after a silent month: the likelihood is ridge-flat and
+    // pure MLE wanders to qTdee -> 0, parking TDEE at an overcorrected level
+    // (the early-August rows read ~1650 that way). The weak MAP prior keeps
+    // the fit near defaults until the era can carry it.
+    const n = 40;
+    const weight = new Array<number | null>(n).fill(80);
+    const counted = new Array<number | null>(n).fill(null);
+    for (let i = 30; i < n; i++) counted[i] = 2500;
+    const { hyper } = fitJoint(weight, counted, 2400);
+    assert.ok(
+      hyper.qTdee > DEFAULT_HYPER.qTdee / 10 && hyper.qTdee < DEFAULT_HYPER.qTdee * 10,
+      `qTdee ${hyper.qTdee} should stay near ${DEFAULT_HYPER.qTdee}`,
+    );
+    const { states } = filterJoint(weight, counted, 2400, hyper);
+    close(states[n - 1]!.tdee, 2500, 150, "short-era TDEE");
   });
 
   it("falls back to defaults when there is no intake to fit on", () => {

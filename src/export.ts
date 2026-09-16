@@ -19,13 +19,13 @@ import {
   dayKcal,
   dayProtein,
   estimate,
-  hyperScope,
+  fitHyperFor,
   tissueAt,
   WEEK_DAYS,
   weekSummary,
   type Estimate,
-  type HyperScope,
 } from "./estimate.js";
+import type { JointHyper } from "./joint3.js";
 import {
   e1rmPoints,
   fitTotal,
@@ -149,10 +149,10 @@ function estimateAt(
   cfg: Config,
   days: Map<DayKey, Day>,
   upto: DayKey,
-  scope: HyperScope,
+  hyper: JointHyper,
 ): Estimate | null {
   const sub = new Map([...days.entries()].filter(([k]) => k <= upto));
-  return estimate(cfg, sub, addDays(upto, 1), scope.at(upto));
+  return estimate(cfg, sub, addDays(upto, 1), hyper);
 }
 
 /** Monday of the week `day` falls in. */
@@ -186,7 +186,7 @@ function rollup(
   days: Map<DayKey, Day>,
   p: Period,
   today: DayKey,
-  scope: HyperScope,
+  hyper: JointHyper,
   index: IndexPoint[],
 ): Rollup {
   const half = cfg.goal.kcalWindow / 2;
@@ -209,7 +209,7 @@ function rollup(
   }
 
   const end = p.to <= today ? p.to : today;
-  const est = estimateAt(cfg, days, end, scope);
+  const est = estimateAt(cfg, days, end, hyper);
 
   // Smoothed weight, not the raw scale reading: the endpoints of a period are
   // otherwise two arbitrary weigh-ins and their difference is mostly water.
@@ -296,8 +296,8 @@ function preamble(cfg: Config, today: DayKey, generatedAt: string): string {
   ].join("\n");
 }
 
-function now(cfg: Config, days: Map<DayKey, Day>, today: DayKey, scope: HyperScope): string {
-  const est = estimate(cfg, days, today, scope.fresh(today));
+function now(cfg: Config, days: Map<DayKey, Day>, today: DayKey, hyper: JointHyper): string {
+  const est = estimate(cfg, days, today, hyper);
   const list = sessionsOf(days);
   const s = strengthOf(list, today, cfg.strength.windowDays);
   const w = weekSummary(days, today, est?.proteinTarget ?? null);
@@ -348,7 +348,7 @@ function weekly(
   cfg: Config,
   days: Map<DayKey, Day>,
   today: DayKey,
-  scope: HyperScope,
+  hyper: JointHyper,
   index: IndexPoint[],
 ): string {
   const rows: string[] = [];
@@ -356,7 +356,7 @@ function weekly(
 
   for (let from = first; from <= today; from = addDays(from, 7)) {
     const p: Period = { from, to: addDays(from, 6) };
-    const r = rollup(cfg, days, p, today, scope, index);
+    const r = rollup(cfg, days, p, today, hyper, index);
     rows.push(
       row(
         from,
@@ -385,7 +385,7 @@ function monthly(
   cfg: Config,
   days: Map<DayKey, Day>,
   today: DayKey,
-  scope: HyperScope,
+  hyper: JointHyper,
   index: IndexPoint[],
 ): string {
   const rows: string[] = [];
@@ -400,7 +400,7 @@ function monthly(
     const from = toDayKey(start);
     const to = toDayKey(new Date(start.getFullYear(), start.getMonth() + 1, 0));
     if (to < first) continue;
-    const r = rollup(cfg, days, { from, to }, today, scope, index);
+    const r = rollup(cfg, days, { from, to }, today, hyper, index);
     rows.push(
       row(
         monthOf(from),
@@ -424,14 +424,14 @@ function monthly(
   );
 }
 
-function daily(cfg: Config, days: Map<DayKey, Day>, today: DayKey, scope: HyperScope): string {
+function daily(cfg: Config, days: Map<DayKey, Day>, today: DayKey, hyper: JointHyper): string {
   const from = addDays(today, -(WINDOW.dailyDays - 1));
   const rows = span(days, from, today).map(([k, d]) =>
     row(
       k,
       parseDay(k).toLocaleDateString("en-US", { weekday: "short" }),
       n(d.weight_kg, 1),
-      n(tissueAt(cfg, days, k, scope.at(k)), 1),
+      n(tissueAt(cfg, days, k, hyper), 1),
       d.items.length ? n(dayKcal(d)) : "",
       d.items.length ? n(dayProtein(d)) : "",
       n(d.goal_kcal),
@@ -550,22 +550,22 @@ export interface ContextOptions {
 export function buildContext(cfg: Config, days: Map<DayKey, Day>, o: ContextOptions): string {
   const { today, generatedAt } = o;
 
-  // Computed once and threaded through: one replay scope, so every row fits
-  // on data up to its own end (strided — a reused fit still ends at or
-  // before its row), plus the strength index over every training day.
-  const scope = hyperScope(cfg, days, 14);
+  // Fit once and threaded through: every row filters with it (levels stay
+  // causal; smoothness is global, so old rows may move when later days
+  // arrive), plus the strength index over every training day.
+  const hyper = fitHyperFor(cfg, days, today);
   const list = sessionsOf(days);
   const points = e1rmPoints(list);
   const index = strengthIndex(points);
 
   return [
     preamble(cfg, today, generatedAt),
-    now(cfg, days, today, scope),
-    weekly(cfg, days, today, scope, index),
-    daily(cfg, days, today, scope),
+    now(cfg, days, today, hyper),
+    weekly(cfg, days, today, hyper, index),
+    daily(cfg, days, today, hyper),
     food(days, today),
     sessions(list, today),
     exercises(points),
-    monthly(cfg, days, today, scope, index),
+    monthly(cfg, days, today, hyper, index),
   ].join("\n");
 }
