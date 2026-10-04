@@ -34,6 +34,12 @@ export interface FoodItem {
   kcal: number;
   protein_g: number;
   /**
+   * The model's 1-sigma on kcal, converted from its 90% interval at parse time.
+   * Stored only on model estimates; hand-entered items derive theirs from
+   * `manualFoodKcalSdPct` at read time, so the rule stays retroactive.
+   */
+  kcal_sd?: number;
+  /**
    * Which model produced the numbers, absent when they were typed by hand —
    * which is the whole of the provenance. There was a separate "llm" | "manual"
    * field alongside this saying the same thing, and nothing read it.
@@ -200,6 +206,16 @@ export interface Config {
     tdeeWindowDays: number;
     blendFullConfidenceDays: number;
     activityFactor: number;
+    /** Scale display step in grams. Readings are rounded to it, so the error is
+     *  uniform over half a step either way; the filter treats it as Gaussian
+     *  noise with the same variance. 0 is a perfect scale. */
+    scalePrecisionG: number;
+    /** Uncertainty on hand-entered food, as a percent of its kcal. Applies to
+     *  any item without a stored `kcal_sd`. */
+    manualFoodKcalSdPct: number;
+    /** Uncertainty on a day with no complete log, in kcal: how far true intake
+     *  can sit from its recent average. High on purpose — nothing was recorded. */
+    unloggedDayKcalSd: number;
     /** Fraction of the accumulated bias handed back per day. 0 disables the correction. */
     biasGain: number;
     /** Leak applied to the bias per counted day. 0.96 is a ~17-day half-life. */

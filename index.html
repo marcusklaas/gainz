@@ -257,6 +257,9 @@
         <label data-tip="How much of the accumulated miss is handed back each day, shifting the whole band. 0 turns the correction off.">Bias gain (0 turns it off) <input id="e-bias-gain" type="number" step="0.05" min="0" required></label>
         <label data-tip="How much of the accumulated miss survives each counted day. 0.96 is about a 17-day half-life.">Bias leak per day <input id="e-bias-leak" type="number" step="0.01" min="0" max="1" required></label>
         <label data-tip="Cap on the accumulated miss, so a long stretch off target cannot move the band without bound.">Bias cap (kcal) <input id="e-bias-max" type="number" min="0" required></label>
+        <label data-tip="Your scale's display step — most show 100 g. Readings are rounded to it, and the filter treats that rounding as noise.">Scale precision (g) <input id="e-scale-precision" type="number" min="0" step="10" required></label>
+        <label data-tip="Uncertainty on hand-entered food, as a percent of its kcal. Model estimates carry their own; this covers the rest.">Manual food sd (%) <input id="e-manual-sd" type="number" min="0" required></label>
+        <label data-tip="How far a day with no complete log can sit from its recent intake average. High on purpose: nothing was recorded.">Unlogged day sd (kcal) <input id="e-unlogged-sd" type="number" min="0" step="50" required></label>
         <label data-tip="How far back the strength verdict is fitted. Longer pins the number down harder and is slower to notice a change; six weeks resolves about 0.85% a week.">Strength window days <input id="s-window" type="number" min="7" required></label>
       </details>
 

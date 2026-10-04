@@ -27,6 +27,9 @@ export const FIELDS: readonly Field[] = [
   ["b-sex", "bio.sex", "m"],
 
   ["e-activity", "estimator.activityFactor", 1.4],
+  ["e-scale-precision", "estimator.scalePrecisionG", 100],
+  ["e-manual-sd", "estimator.manualFoodKcalSdPct", 15],
+  ["e-unlogged-sd", "estimator.unloggedDayKcalSd", 750],
   // No smoother knobs: the joint filter fits its own hyperparameters on every
   // load. levelHalfLifeDays, trendHalfLifeDays and blendFullConfidenceDays
   // stay in the config shape (stored configs may carry them) but nothing reads

@@ -10,6 +10,7 @@ import {
   filterJoint,
   fitJoint,
   inputsFor,
+  scaleVarKg2,
 } from "../src/joint3.js";
 import type { Day, DayKey } from "../src/types.js";
 
@@ -19,11 +20,17 @@ const close = (actual: number, expected: number, eps: number, what = "") =>
     `${what || "value"}: expected ${expected} ± ${eps}, got ${actual}`,
   );
 
-/** `n` days of flat weight and flat counted intake. */
-const flat = (n: number, kg: number, kcal: number) => ({
+/** `n` days of flat weight and flat counted intake with a flat day sd. */
+const flat = (n: number, kg: number, kcal: number, sd = 150) => ({
   weight: new Array<number | null>(n).fill(kg),
   counted: new Array<number | null>(n).fill(kcal),
+  countedSd: new Array<number | null>(n).fill(sd),
 });
+
+/** The shipped default: a 100 g scale step. */
+const R100 = scaleVarKg2(100);
+/** The shipped default: wide-open unlogged days. */
+const UNLOGGED_SD = 750;
 
 // ------------------------------------------------------------- inputs gate
 
@@ -35,9 +42,10 @@ describe("inputsFor", () => {
       ["2026-01-01", day({ weight_kg: 80, items: [{ id: "a", at: "x", name: "f", kcal: 2000, protein_g: 0 }], logging: "complete" })],
       ["2026-01-02", day({ weight_kg: 81, items: [{ id: "b", at: "x", name: "f", kcal: 9000, protein_g: 0 }], logging: "complete" })],
     ]);
-    const inputs = inputsFor(days, "2026-01-02", "2026-01-02")!;
+    const inputs = inputsFor(days, "2026-01-02", "2026-01-02", 15)!;
     assert.deepEqual(inputs.weight, [80, 81]);
     assert.deepEqual(inputs.counted, [2000, null]);
+    assert.deepEqual(inputs.countedSd, [300, null]);
   });
 
   it("reads unlogged days as gaps, never zero", () => {
@@ -45,8 +53,25 @@ describe("inputsFor", () => {
       ["2026-01-01", day({ weight_kg: 80 })],
       ["2026-01-02", day({ weight_kg: 81 })],
     ]);
-    const inputs = inputsFor(days, "2026-01-02", "2026-01-03")!;
+    const inputs = inputsFor(days, "2026-01-02", "2026-01-03", 15)!;
     assert.deepEqual(inputs.counted, [null, null]);
+    assert.deepEqual(inputs.countedSd, [null, null]);
+  });
+
+  it("takes stored sds, else the percent rule, variances added", () => {
+    const days = new Map<DayKey, Day>([
+      ["2026-01-01", day({
+        items: [
+          { id: "a", at: "x", name: "f", kcal: 1000, protein_g: 0, kcal_sd: 50, model: "m" },
+          { id: "b", at: "x", name: "g", kcal: 500, protein_g: 0 },
+        ],
+        logging: "complete",
+      })],
+    ]);
+    const inputs = inputsFor(days, "2026-01-01", "2026-01-02", 10)!;
+    assert.deepEqual(inputs.counted, [1500]);
+    // Stored 50 wins on the first item; the second falls back to 10% of 500.
+    close(inputs.countedSd[0]!, Math.sqrt(50 * 50 + 50 * 50), 1e-9, "day sd");
   });
 });
 
@@ -66,12 +91,31 @@ describe("ewmaFill", () => {
   });
 });
 
+// -------------------------------------------------------- scale variance
+
+describe("scaleVarKg2", () => {
+  it("is the uniform-rounding variance p^2/12 in kg^2", () => {
+    close(scaleVarKg2(100), 0.01 / 12, 1e-12, "100 g step");
+    close(scaleVarKg2(1000), 1 / 12, 1e-12, "1 kg step");
+  });
+
+  it("scales quadratically with the step", () => {
+    close(scaleVarKg2(200) / scaleVarKg2(100), 4, 1e-12, "double step, fourfold variance");
+  });
+
+  it("reads non-positive input as a perfect scale", () => {
+    assert.equal(scaleVarKg2(0), 0);
+    assert.equal(scaleVarKg2(-50), 0);
+    assert.equal(scaleVarKg2(NaN), 0);
+  });
+});
+
 // ----------------------------------------------------------------- filter
 
 describe("filterJoint", () => {
   it("holds flat weight on flat intake at that intake", () => {
-    const { weight, counted } = flat(60, 80, 2500);
-    const { states } = filterJoint(weight, counted, 2400, DEFAULT_HYPER);
+    const { weight, counted, countedSd } = flat(60, 80, 2500);
+    const { states } = filterJoint(weight, counted, countedSd, 2400, DEFAULT_HYPER, R100, UNLOGGED_SD);
     const last = states[59]!;
     close(last.tissue, 80, 0.05, "tissue");
     close(last.tdee, 2500, 1, "tdee");
@@ -81,10 +125,10 @@ describe("filterJoint", () => {
   it("parks a one-day scale spike in water, and TDEE recovers", () => {
     // A salty meal, not a kilo of fat overnight — run through the pipeline as
     // shipped (fit, then filter), not at hand-picked hyperparameters.
-    const { weight, counted } = flat(60, 80, 2500);
+    const { weight, counted, countedSd } = flat(60, 80, 2500);
     weight[30] = 81;
-    const { hyper } = fitJoint(weight, counted, 2400);
-    const { states } = filterJoint(weight, counted, 2400, hyper);
+    const { hyper } = fitJoint(weight, counted, countedSd, 2400, R100, UNLOGGED_SD);
+    const { states } = filterJoint(weight, counted, countedSd, 2400, hyper, R100, UNLOGGED_SD);
     const before = states[29]!;
     const spike = states[30]!;
     const dTissue = spike.tissue - before.tissue;
@@ -107,7 +151,8 @@ describe("filterJoint", () => {
     const n = 90;
     const weight = Array.from({ length: n }, (_, i) => 90 - (0.5 / 7) * i);
     const counted = new Array<number | null>(n).fill(2000);
-    const { states } = filterJoint(weight, counted, 2400, DEFAULT_HYPER);
+    const countedSd = new Array<number | null>(n).fill(150);
+    const { states } = filterJoint(weight, counted, countedSd, 2400, DEFAULT_HYPER, R100, UNLOGGED_SD);
     const last = states[n - 1]!;
     close(last.tdee, 2000 + (0.5 * 7700) / 7, 25, "tdee");
     close(last.slope * 7, -0.5, 0.05, "slope");
@@ -116,11 +161,62 @@ describe("filterJoint", () => {
   it("coasts tissue through gaps with no update", () => {
     // Prior at intake, so the drive is zero from the start: with no
     // observations and no drift there is nothing to move tissue at all.
-    const { weight, counted } = flat(30, 80, 2500);
+    const { weight, counted, countedSd } = flat(30, 80, 2500);
     for (let i = 10; i < 20; i++) weight[i] = null;
-    const { states } = filterJoint(weight, counted, 2500, DEFAULT_HYPER);
+    const { states } = filterJoint(weight, counted, countedSd, 2500, DEFAULT_HYPER, R100, UNLOGGED_SD);
     close(states[19]!.tissue, states[9]!.tissue, 1e-6, "gap coast");
     assert.ok(states[15]!.tissueSd > states[9]!.tissueSd, "uncertainty must grow over gaps");
+  });
+
+  it("trusts the scale less when the step is coarse", () => {
+    // Same spike, same hyperparameters, different R: the coarse run must move
+    // tissue less and carry the extra variance in its innovations. Stated as a
+    // comparison, so it survives hyperparameter changes.
+    const { weight, counted, countedSd } = flat(60, 80, 2500);
+    weight[30] = 81;
+    const fine = filterJoint(weight, counted, countedSd, 2400, DEFAULT_HYPER, scaleVarKg2(10), UNLOGGED_SD);
+    const coarse = filterJoint(weight, counted, countedSd, 2400, DEFAULT_HYPER, scaleVarKg2(1000), UNLOGGED_SD);
+    const dFine = fine.states[30]!.tissue - fine.states[29]!.tissue;
+    const dCoarse = coarse.states[30]!.tissue - coarse.states[29]!.tissue;
+    assert.ok(
+      dCoarse < dFine,
+      `coarse tissue move ${dCoarse} should be smaller than fine ${dFine}`,
+    );
+    const fFine = fine.innov.find((r) => r.t === 30)!.f;
+    const fCoarse = coarse.innov.find((r) => r.t === 30)!.f;
+    assert.ok(fCoarse > fFine, `coarse f ${fCoarse} should exceed fine f ${fFine}`);
+  });
+
+  it("widens tissue uncertainty when intake is noisy", () => {
+    // Same flat history, same hyperparameters, different day sd: the noisy run
+    // must carry a wider tissue posterior and fatter innovations throughout.
+    const exact = flat(60, 80, 2500, 0);
+    const noisy = flat(60, 80, 2500, 500);
+    const a = filterJoint(exact.weight, exact.counted, exact.countedSd, 2400, DEFAULT_HYPER, R100, UNLOGGED_SD);
+    const b = filterJoint(noisy.weight, noisy.counted, noisy.countedSd, 2400, DEFAULT_HYPER, R100, UNLOGGED_SD);
+    assert.ok(
+      b.states[59]!.tissueSd > a.states[59]!.tissueSd,
+      `noisy tissueSd ${b.states[59]!.tissueSd} should exceed exact ${a.states[59]!.tissueSd}`,
+    );
+    const fa = a.innov.find((r) => r.t === 59)!.f;
+    const fb = b.innov.find((r) => r.t === 59)!.f;
+    assert.ok(fb > fa, `noisy f ${fb} should exceed exact f ${fa}`);
+  });
+
+  it("tracks the scale across unlogged gaps when unlogged sd is wide", () => {
+    // Intake stops being recorded halfway while weight climbs 80 to 82. With a
+    // wide unlogged sd the filter admits it has no idea and follows the scale;
+    // with a narrow one it insists intake held at maintenance and lags behind.
+    const n = 40;
+    const weight = Array.from({ length: n }, (_, i) => (i < 20 ? 80 : 80 + 0.1 * (i - 19)));
+    const counted = Array.from({ length: n }, (_, i) => (i < 20 ? 2500 : null));
+    const countedSd = Array.from({ length: n }, (_, i) => (i < 20 ? 150 : null));
+    const narrow = filterJoint(weight, counted, countedSd, 2400, DEFAULT_HYPER, R100, 50);
+    const wide = filterJoint(weight, counted, countedSd, 2400, DEFAULT_HYPER, R100, 3000);
+    const tNarrow = narrow.states[n - 1]!.tissue;
+    const tWide = wide.states[n - 1]!.tissue;
+    assert.ok(tWide > tNarrow, `wide ${tWide} should track above narrow ${tNarrow}`);
+    assert.ok(Math.abs(tWide - 82) < Math.abs(tNarrow - 82), "wide should sit closer to the scale");
   });
 });
 
@@ -128,9 +224,9 @@ describe("filterJoint", () => {
 
 describe("fitJoint", () => {
   it("is deterministic and keeps phi inside (0, 1)", () => {
-    const { weight, counted } = flat(60, 80, 2500);
-    const a = fitJoint(weight, counted, 2400);
-    const b = fitJoint(weight, counted, 2400);
+    const { weight, counted, countedSd } = flat(60, 80, 2500);
+    const a = fitJoint(weight, counted, countedSd, 2400, R100, UNLOGGED_SD);
+    const b = fitJoint(weight, counted, countedSd, 2400, R100, UNLOGGED_SD);
     assert.deepEqual(a.hyper, b.hyper);
     assert.ok(a.hyper.phi > 0 && a.hyper.phi < 1, `phi ${a.hyper.phi}`);
     assert.ok(a.hyper.qTdee > 0 && a.hyper.qWater > 0);
@@ -145,20 +241,25 @@ describe("fitJoint", () => {
     const n = 40;
     const weight = new Array<number | null>(n).fill(80);
     const counted = new Array<number | null>(n).fill(null);
-    for (let i = 30; i < n; i++) counted[i] = 2500;
-    const { hyper } = fitJoint(weight, counted, 2400);
+    const countedSd = new Array<number | null>(n).fill(null);
+    for (let i = 30; i < n; i++) {
+      counted[i] = 2500;
+      countedSd[i] = 150;
+    }
+    const { hyper } = fitJoint(weight, counted, countedSd, 2400, R100, UNLOGGED_SD);
     assert.ok(
       hyper.qTdee > DEFAULT_HYPER.qTdee / 10 && hyper.qTdee < DEFAULT_HYPER.qTdee * 10,
       `qTdee ${hyper.qTdee} should stay near ${DEFAULT_HYPER.qTdee}`,
     );
-    const { states } = filterJoint(weight, counted, 2400, hyper);
+    const { states } = filterJoint(weight, counted, countedSd, 2400, hyper, R100, UNLOGGED_SD);
     close(states[n - 1]!.tdee, 2500, 150, "short-era TDEE");
   });
 
   it("falls back to defaults when there is no intake to fit on", () => {
     const weight = new Array<number | null>(30).fill(80);
     const counted = new Array<number | null>(30).fill(null);
-    const fit = fitJoint(weight, counted, 2400);
+    const countedSd = new Array<number | null>(30).fill(null);
+    const fit = fitJoint(weight, counted, countedSd, 2400, R100, UNLOGGED_SD);
     assert.deepEqual(fit.hyper, DEFAULT_HYPER);
   });
 
@@ -168,10 +269,13 @@ describe("fitJoint", () => {
     // dominated by the wide TDEE prior. Pre-intake residuals never enter the
     // sum (the handoff state legitimately depends on history — that is the
     // filter, not the scoring — so this pins the window, not the state).
-    const { weight, counted } = flat(50, 80, 2500);
-    for (let i = 0; i < 20; i++) counted[i] = null;
+    const { weight, counted, countedSd } = flat(50, 80, 2500);
+    for (let i = 0; i < 20; i++) {
+      counted[i] = null;
+      countedSd[i] = null;
+    }
     const era0 = 20;
-    const { innov } = filterJoint(weight, counted, 2400, DEFAULT_HYPER);
+    const { innov } = filterJoint(weight, counted, countedSd, 2400, DEFAULT_HYPER, R100, UNLOGGED_SD);
     let manual = 0;
     let n = 0;
     for (const r of innov) {
@@ -180,6 +284,6 @@ describe("fitJoint", () => {
       n++;
     }
     assert.ok(n >= 3, "the era must actually score days");
-    close(eraLoglik(weight, counted, 2400, DEFAULT_HYPER), manual, 1e-9, "era loglik");
+    close(eraLoglik(weight, counted, countedSd, 2400, DEFAULT_HYPER, R100, UNLOGGED_SD), manual, 1e-9, "era loglik");
   });
 });

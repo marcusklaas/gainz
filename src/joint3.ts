@@ -1,4 +1,4 @@
-// Joint weight/TDEE estimation: intake as a known input, not a second average.
+// Joint weight/TDEE estimation: intake as a noisy input, not a second average.
 //
 // State is [tissue, water, TDEE]:
 //
@@ -6,6 +6,11 @@
 //   water[t]  = phi * water[t-1]          (zero-mean AR(1) transient)
 //   TDEE[t]   = TDEE[t-1]                 (slow random walk)
 //   scale[t]  = tissue[t] + water[t]
+//
+// Intake carries a known variance — a per-day sd on counted days, a wide
+// unlogged-day sd everywhere else — which lands on tissue as process noise.
+// Noisy intake therefore widens the tissue posterior and shifts the Kalman
+// gain toward the scale, with no heuristic gain-scaling needed.
 //
 // When intake ~= TDEE the filter predicts no change, so a scale jump lands in
 // water; when intake >> TDEE it predicts a jump of a known size and tissue
@@ -33,16 +38,28 @@ export interface JointHyper {
 /** MLE fit on real data; also the fallback when there is no intake to fit on. */
 export const DEFAULT_HYPER: JointHyper = { qTdee: 732, qWater: 0.097, phi: 0.75 };
 
-/** Pinned, not fitted. Composition does not teleport; the scale is accurate
- *  and the day-to-day spread is short-lived physiology, which is water's job. */
+/** Pinned, not fitted: composition does not teleport. */
 const Q_LEAN = 0;
-const R_OBS = 1e-6;
 /** Gap-fill clock for missing intake: recent logging carries forward. */
 const EWMA_HALF_LIFE_DAYS = 12;
 /** Leading era innovations dropped from the likelihood (wide-prior warm-up). */
 const FIT_BURN = 5;
 /** TDEE prior width, kcal/day. Wide on purpose: the cold start is honest. */
 const PRIOR_TDEE_SD = 400;
+
+/**
+ * Observation variance in kg^2 for a scale with the given display step in
+ * grams. The reading is the truth rounded to the step, so the error is uniform
+ * over half a step either way — variance p^2/12 — and is treated as Gaussian
+ * with that same variance, which is what the Kalman update wants. No drift
+ * between readings is assumed: the scale is accurate, merely coarse.
+ * Non-positive input reads as a perfect scale rather than failing the filter.
+ */
+export function scaleVarKg2(precisionG: number): number {
+  if (!(precisionG > 0)) return 0;
+  const stepKg = precisionG / 1000;
+  return (stepKg * stepKg) / 12;
+}
 
 export interface JointState {
   tissue: number;
@@ -68,16 +85,25 @@ export interface JointInputs {
   /** Fully-logged intake, else null. Days >= `today` are always null: a day
    *  still in progress would drag its own target down. */
   counted: (number | null)[];
+  /** Per-day intake sd in kcal, alongside `counted`: null wherever it is. */
+  countedSd: (number | null)[];
 }
 
-export function inputsFor(days: Map<DayKey, Day>, end: DayKey, today: DayKey): JointInputs | null {
+export function inputsFor(
+  days: Map<DayKey, Day>,
+  end: DayKey,
+  today: DayKey,
+  manualPct: number,
+): JointInputs | null {
   const keys = [...days.keys()].sort();
   if (!keys.length) return null;
   const start = keys[0]!;
   const n = daysBetween(start, end) + 1;
   if (n <= 0) return null;
+  const frac = manualPct / 100;
   const weight: (number | null)[] = new Array(n).fill(null);
   const counted: (number | null)[] = new Array(n).fill(null);
+  const countedSd: (number | null)[] = new Array(n).fill(null);
   for (const [day, d] of days) {
     if (day < start || day > end) continue;
     const i = daysBetween(start, day);
@@ -85,9 +111,18 @@ export function inputsFor(days: Map<DayKey, Day>, end: DayKey, today: DayKey): J
     if (day >= today) continue;
     if (d.logging === "complete" && d.items.length) {
       counted[i] = d.items.reduce((a, it) => a + it.kcal, 0);
+      // Stored sd wins, else the manual percent rule — one rule for every item
+      // without a stored sd, manual or otherwise. Item errors are taken as
+      // independent, so variances add.
+      countedSd[i] = Math.sqrt(
+        d.items.reduce((a, it) => {
+          const sd = it.kcal_sd ?? frac * it.kcal;
+          return a + sd * sd;
+        }, 0),
+      );
     }
   }
-  return { start, weight, counted };
+  return { start, weight, counted, countedSd };
 }
 
 /** Calendar-time EWMA fill over counted days: w = 0.5^(age / halfLife).
@@ -118,8 +153,13 @@ interface Vec3 {
 export function filterJoint(
   weight: (number | null)[],
   counted: (number | null)[],
+  countedSd: (number | null)[],
   e0: number,
   hyper: JointHyper,
+  /** Observation variance in kg^2 — `scaleVarKg2` of the scale's step. */
+  rObs: number,
+  /** Intake sd in kcal for days with no complete log. */
+  unloggedSd: number,
   rho: number = KCAL_PER_KG_FAT,
 ): { states: (JointState | null)[]; innov: Innovation[] } {
   const n = weight.length;
@@ -133,6 +173,9 @@ export function filterJoint(
   // feast would drive as yesterday's average.
   const fill = ewmaFill(counted, EWMA_HALF_LIFE_DAYS);
   const drive: (number | null)[] = counted.map((c, t) => c ?? fill[t] ?? null);
+  // Drive sd needs no fill: a counted day carries its own, and every other day
+  // carries the unlogged-day sd — filled or maintenance, nothing was recorded.
+  const driveSd: number[] = countedSd.map((sd) => sd ?? unloggedSd);
 
   let start = -1;
   for (let i = 0; i < n; i++) {
@@ -163,6 +206,7 @@ export function filterJoint(
   let p22 = PRIOR_TDEE_SD * PRIOR_TDEE_SD;
 
   const driveAt = (t: number): number | null => (t >= 0 && t < n ? (drive[t] ?? null) : null);
+  const driveSdAt = (t: number): number => (t >= 0 && t < n ? driveSd[t]! : unloggedSd);
 
   const store = (t: number) => {
     const uu = driveAt(t);
@@ -189,13 +233,15 @@ export function filterJoint(
       p22 = PRIOR_TDEE_SD * PRIOR_TDEE_SD;
     }
     const uu = driveAt(t - 1) ?? x.e; // maintenance: drive -> 0
+    const du = driveSdAt(t - 1);
     // Predict: w += (u - e) * k; v *= phi; e coasts.
     x = { w: x.w + (uu - x.e) * k, v: phi * x.v, e: x.e };
     // P = F P F' + Q with F = [[1,0,-k],[0,phi,0],[0,0,1]], Q = diag(0, qW, qE).
     // Only the upper triangle is stored; symmetry is exact from a symmetric
-    // start, so no symmetrisation pass is needed.
+    // start, so no symmetrisation pass is needed. Intake noise is exogenous —
+    // independent of the state — so it lands on tissue alone, as k^2 Var(u).
     const a02 = p02 - k * p22;
-    p00 = p00 - 2 * k * p02 + k * k * p22 + Q_LEAN;
+    p00 = p00 - 2 * k * p02 + k * k * p22 + Q_LEAN + k * k * du * du;
     p01 = phi * (p01 - k * p12);
     p02 = a02;
     p11 = phi * phi * p11 + qWater;
@@ -204,7 +250,7 @@ export function filterJoint(
     const yt = weight[t] ?? null;
     if (yt !== null) {
       // H = [1, 1, 0]: f = P00 + P01 + P10 + P11 + r.
-      const f = p00 + 2 * p01 + p11 + R_OBS;
+      const f = p00 + 2 * p01 + p11 + rObs;
       const vv = yt - (x.w + x.v);
       const g0 = (p00 + p01) / f;
       const g1 = (p01 + p11) / f;
@@ -233,8 +279,11 @@ export function filterJoint(
 export function eraLoglik(
   weight: (number | null)[],
   counted: (number | null)[],
+  countedSd: (number | null)[],
   e0: number,
   hyper: JointHyper,
+  rObs: number,
+  unloggedSd: number,
   rho: number = KCAL_PER_KG_FAT,
 ): number {
   let era0 = -1;
@@ -245,7 +294,7 @@ export function eraLoglik(
     }
   }
   if (era0 === -1) return -Infinity;
-  const { innov } = filterJoint(weight, counted, e0, hyper, rho);
+  const { innov } = filterJoint(weight, counted, countedSd, e0, hyper, rObs, unloggedSd, rho);
   const use = innov.filter((r) => r.t >= era0 + FIT_BURN);
   if (use.length < 3) return -Infinity;
   let ll = 0;
@@ -334,7 +383,10 @@ export interface JointFit {
 export function fitJoint(
   weight: (number | null)[],
   counted: (number | null)[],
+  countedSd: (number | null)[],
   e0: number,
+  rObs: number,
+  unloggedSd: number,
   rho: number = KCAL_PER_KG_FAT,
 ): JointFit {
   let era0 = -1;
@@ -363,7 +415,7 @@ export function fitJoint(
     Math.log(DEFAULT_HYPER.phi / (1 - DEFAULT_HYPER.phi)),
   ];
   const neg = (theta: number[]): number => {
-    const ll = eraLoglik(weight, counted, e0, unpack(theta), rho);
+    const ll = eraLoglik(weight, counted, countedSd, e0, unpack(theta), rObs, unloggedSd, rho);
     if (!Number.isFinite(ll)) return 1e12;
     const pen =
       (theta[0]! - t0[0]!) ** 2 + (theta[1]! - t0[1]!) ** 2 + (theta[2]! - t0[2]!) ** 2;
@@ -385,5 +437,5 @@ export function fitJoint(
   const hyper = unpack(best.x);
   // Pure era log-likelihood, without the MAP penalty, so it stays comparable
   // across fits.
-  return { hyper, loglik: eraLoglik(weight, counted, e0, hyper, rho), nEra };
+  return { hyper, loglik: eraLoglik(weight, counted, countedSd, e0, hyper, rObs, unloggedSd, rho), nEra };
 }

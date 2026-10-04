@@ -447,6 +447,64 @@ describe("estimate", () => {
     assert.equal(estimate(config(), new Map([[on(1), logged(2000)]]), today), null);
   });
 
+  it("defaults the scale step to 100 g and trusts a spike less when coarser", () => {
+    assert.equal(defaultConfig().estimator.scalePrecisionG, 100);
+    // Spike on the last day, full pipeline (fit, then filter) in both runs:
+    // the coarse run's trend must sit closer to the flat history.
+    const spiked = (over: Partial<Config["estimator"]>) => {
+      const cfg = config(over);
+      const days = history(60, (i) => ({ ...logged(2600, 2600), weight_kg: i === 59 ? 81 : 80 }));
+      return estimate(cfg, days, today)!.trendKg;
+    };
+    const fine = spiked({ scalePrecisionG: 10 });
+    const coarse = spiked({ scalePrecisionG: 2000 });
+    assert.ok(fine > 80 && coarse > 80, "a spike must move the trend up");
+    assert.ok(coarse < fine, `coarse ${coarse} should sit below fine ${fine}`);
+  });
+
+  it("defaults intake uncertainty wide on unlogged days, 15% on manual food", () => {
+    const e = defaultConfig().estimator;
+    assert.equal(e.manualFoodKcalSdPct, 15);
+    assert.equal(e.unloggedDayKcalSd, 750);
+  });
+
+  it("trusts the scale more when manual food is noisier", () => {
+    // The mirror of the scale test: noisy intake widens the tissue posterior,
+    // so the Kalman gain leans on the scale instead and a last-day spike pulls
+    // the trend up further. Full pipeline (fit, then filter) in both runs.
+    const spiked = (over: Partial<Config["estimator"]>) => {
+      const cfg = config(over);
+      const days = history(60, (i) => ({ ...logged(2600, 2600), weight_kg: i === 59 ? 81 : 80 }));
+      return estimate(cfg, days, today)!.trendKg;
+    };
+    const sure = spiked({ manualFoodKcalSdPct: 5 });
+    const unsure = spiked({ manualFoodKcalSdPct: 60 });
+    assert.ok(sure > 80 && unsure > 80, "a spike must move the trend up");
+    assert.ok(unsure > sure, `unsure ${unsure} should sit above sure ${sure}`);
+  });
+
+  it("reads stored item sds over the manual percent rule", () => {
+    // Same totals, same spike: days carrying tight stored sds trust intake and
+    // barely answer the scale, while the percent rule answers it more.
+    const day = (sd: number | undefined): Day => ({
+      items: [{ ...food(2600), ...(sd === undefined ? {} : { kcal_sd: sd }) }],
+      logging: "complete",
+      goal_kcal: 2600,
+    });
+    const run = (sd: number | undefined) => {
+      const cfg = config({ manualFoodKcalSdPct: 60 });
+      const days = history(60, (i) => {
+        const d = day(sd);
+        return { ...d, weight_kg: i === 59 ? 81 : 80 };
+      });
+      return estimate(cfg, days, today)!.trendKg;
+    };
+    const stored = run(30);
+    const rule = run(undefined);
+    assert.ok(stored > 80 && rule > 80, "a spike must move the trend up");
+    assert.ok(stored < rule, `stored-sd ${stored} should sit below rule ${rule}`);
+  });
+
   it("falls back to the formula alone when nothing is logged", () => {
     const cfg = config();
     const days = new Map<DayKey, Day>([[on(59), { items: [], weight_kg: 80 }]]);
@@ -462,18 +520,26 @@ describe("estimate", () => {
 
   it("converges on measured intake once enough days are logged", () => {
     // Weight dead flat and 2600 kcal eaten every day: whatever the formula says,
-    // the measurement says TDEE is 2600. The old pipeline stated that as an
-    // algebraic identity; the joint filter approaches it asymptotically, so the
-    // tolerance below is convergence, not arithmetic. All intake counts now —
-    // there is no window — hence countedDays is the whole log.
+    // the measurement says TDEE is 2600. The joint filter approaches it
+    // asymptotically, so the tolerance below is convergence, not arithmetic —
+    // and intake now carries ±15% a day, so sixty days no longer pin it to the
+    // millikcal the way exact intake did. All intake counts — there is no
+    // window — hence countedDays is the whole log.
     const cfg = config({ biasGain: 0 });
     const days = history(60, (i) => ({ ...logged(2600, 2600), weight_kg: 80 }));
     const e = estimate(cfg, days, today)!;
 
     assert.equal(e.countedDays, 60);
-    close(e.kgPerWeek!, 0, 1e-6);
-    close(e.tdee, 2600, 1e-3);
+    close(e.kgPerWeek!, 0, 5e-4);
+    close(e.tdee, 2600, 0.5);
     close(e.goalKcal, e.tdee + cfg.goal.kcalOffset, 1e-9);
+
+    // Converging, not merely close: twice the days lands closer. This is the
+    // property the tolerances above only approximate.
+    const long = history(120, () => ({ ...logged(2600, 2600), weight_kg: 80 }));
+    const e2 = estimate(cfg, long, on(120))!;
+    assert.ok(Math.abs(e2.tdee - 2600) < Math.abs(e.tdee - 2600), "tdee should converge");
+    assert.ok(Math.abs(e2.kgPerWeek!) < Math.abs(e.kgPerWeek!), "rate should converge");
   });
 
   it("charges weight change against intake at the fat-equivalent rate", () => {
@@ -537,7 +603,9 @@ describe("estimate", () => {
     const a = estimate(cfg, base, today)!;
     const b = estimate(cfg, withWeighIn, today)!;
     assert.ok(b.tdee !== a.tdee, "a fresh weigh-in must move the filter");
-    assert.ok(Math.abs(b.tdee - a.tdee) < 1e-3, "on flat data the move is a whisper");
+    // Still a whisper in kcal terms — but a louder one than under exact
+    // intake, because noisy intake widens the posterior the gain works from.
+    assert.ok(Math.abs(b.tdee - a.tdee) < 0.05, "on flat data the move is a whisper");
     assert.equal(b.countedDays, a.countedDays);
   });
 
