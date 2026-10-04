@@ -22,6 +22,10 @@ const MAX_TOKENS = 200;
 export interface Estimated {
   kcal: number;
   protein_g: number;
+  /** 1-sigma on kcal, converted from the 90% interval at parse time. Absent
+   *  when the interval came back unusable — the caller falls back to the
+   *  manual percent rule rather than losing the estimate. */
+  kcal_sd?: number;
 }
 
 const SCHEMA = {
@@ -29,8 +33,10 @@ const SCHEMA = {
   properties: {
     kcal: { type: "number", description: "Total calories for everything described" },
     protein_g: { type: "number", description: "Total protein in grams for everything described" },
+    kcal_low: { type: "number", description: "Low end of the 90% interval for total calories" },
+    kcal_high: { type: "number", description: "High end of the 90% interval for total calories" },
   },
-  required: ["kcal", "protein_g"],
+  required: ["kcal", "protein_g", "kcal_low", "kcal_high"],
   additionalProperties: false,
 };
 
@@ -44,8 +50,15 @@ const PROMPT = [
   "- Assume ordinary portion sizes when the user does not say.",
   "- Take the user's hints seriously: \"light\", \"not heavy on calories\", \"big\",",
   "  \"just a bit\" should visibly move the estimate.",
+  "- Also give kcal_low and kcal_high: a range you are 90% sure contains the",
+  "  true total. Keep it tight when amounts are weighed or stated; widen it for",
+  "  vague portions, restaurant food, and hidden fats like oils, butter, cheese",
+  "  and sauces.",
   "- A rough number is useful; refusing is not. Always give your best guess.",
 ].join("\n");
+
+/** A 90% normal interval spans ±1.645 sigma, so its width is 3.29 sigma. */
+const INTERVAL90_WIDTH_IN_SD = 3.29;
 
 async function failure(res: Response): Promise<Error> {
   if (res.status === 401) return new Error("API key rejected. Check it in Settings.");
@@ -145,9 +158,14 @@ export async function estimateFood(text: string, o: Options): Promise<Estimated>
 
   // Structured output should guarantee JSON, but a refusal or a truncated reply
   // would surface here as a raw parser error otherwise.
-  let payload: { kcal?: unknown; protein_g?: unknown };
+  let payload: { kcal?: unknown; protein_g?: unknown; kcal_low?: unknown; kcal_high?: unknown };
   try {
-    payload = JSON.parse(json) as { kcal?: unknown; protein_g?: unknown };
+    payload = JSON.parse(json) as {
+      kcal?: unknown;
+      protein_g?: unknown;
+      kcal_low?: unknown;
+      kcal_high?: unknown;
+    };
   } catch {
     throw new Error("Could not read the estimate. Try rephrasing.");
   }
@@ -158,5 +176,17 @@ export async function estimateFood(text: string, o: Options): Promise<Estimated>
   if (!Number.isFinite(kcal) || !Number.isFinite(protein)) {
     throw new Error("Estimate came back without usable numbers");
   }
-  return { kcal: Math.round(kcal), protein_g: Math.round(protein * 10) / 10 };
+  // The interval is converted to an sd immediately and never stored: the app
+  // only speaks sd, the same unit the manual percent rule produces.
+  const low = Number(payload.kcal_low);
+  const high = Number(payload.kcal_high);
+  const sd =
+    Number.isFinite(low) && Number.isFinite(high)
+      ? Math.round(Math.abs(high - low) / INTERVAL90_WIDTH_IN_SD)
+      : undefined;
+  return {
+    kcal: Math.round(kcal),
+    protein_g: Math.round(protein * 10) / 10,
+    ...(sd === undefined ? {} : { kcal_sd: sd }),
+  };
 }

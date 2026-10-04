@@ -14,6 +14,7 @@ import {
   filterJoint,
   fitJoint,
   inputsFor,
+  scaleVarKg2,
   type JointHyper,
   type JointInputs,
 } from "./joint3.js";
@@ -338,9 +339,12 @@ function priorE0(cfg: Config, inputs: JointInputs, today: DayKey): number {
 export function fitHyperFor(cfg: Config, days: Map<DayKey, Day>, today: DayKey): JointHyper {
   const keys = [...days.keys()].sort();
   if (!keys.length) return { ...DEFAULT_HYPER };
-  const inputs = inputsFor(days, keys[keys.length - 1]!, today);
+  const inputs = inputsFor(days, keys[keys.length - 1]!, today, cfg.estimator.manualFoodKcalSdPct);
   if (!inputs) return { ...DEFAULT_HYPER };
-  return fitJoint(inputs.weight, inputs.counted, priorE0(cfg, inputs, today)).hyper;
+  const rObs = scaleVarKg2(cfg.estimator.scalePrecisionG);
+  const uSd = cfg.estimator.unloggedDayKcalSd;
+  return fitJoint(inputs.weight, inputs.counted, inputs.countedSd, priorE0(cfg, inputs, today), rObs, uSd)
+    .hyper;
 }
 
 // Re-exported for callers that fit once and thread the result through.
@@ -367,11 +371,13 @@ export function tissueAt(
   const sub = new Map([...days.entries()].filter(([k]) => k <= day));
   const keys = [...sub.keys()].sort();
   if (!keys.length) return null;
-  const inputs = inputsFor(sub, keys[keys.length - 1]!, addDays(day, 1));
+  const inputs = inputsFor(sub, keys[keys.length - 1]!, addDays(day, 1), cfg.estimator.manualFoodKcalSdPct);
   if (!inputs) return null;
   const e0 = priorE0(cfg, inputs, addDays(day, 1));
-  const h = hyper ?? fitJoint(inputs.weight, inputs.counted, e0).hyper;
-  const { states } = filterJoint(inputs.weight, inputs.counted, e0, h);
+  const rObs = scaleVarKg2(cfg.estimator.scalePrecisionG);
+  const uSd = cfg.estimator.unloggedDayKcalSd;
+  const h = hyper ?? fitJoint(inputs.weight, inputs.counted, inputs.countedSd, e0, rObs, uSd).hyper;
+  const { states } = filterJoint(inputs.weight, inputs.counted, inputs.countedSd, e0, h, rObs, uSd);
   const i = daysBetween(inputs.start, day);
   return states[i]?.tissue ?? null;
 }
@@ -392,11 +398,13 @@ export function estimate(
   // what gives the bias accumulator its free property: today's target is built
   // from earlier days only, so logging food cannot move it.
   const end = samples[samples.length - 1]!.day;
-  const inputs = inputsFor(days, end, today);
+  const inputs = inputsFor(days, end, today, cfg.estimator.manualFoodKcalSdPct);
   if (!inputs) return null;
   const e0 = priorE0(cfg, inputs, today);
-  const h = hyper ?? fitJoint(inputs.weight, inputs.counted, e0).hyper;
-  const { states } = filterJoint(inputs.weight, inputs.counted, e0, h);
+  const rObs = scaleVarKg2(cfg.estimator.scalePrecisionG);
+  const uSd = cfg.estimator.unloggedDayKcalSd;
+  const h = hyper ?? fitJoint(inputs.weight, inputs.counted, inputs.countedSd, e0, rObs, uSd).hyper;
+  const { states } = filterJoint(inputs.weight, inputs.counted, inputs.countedSd, e0, h, rObs, uSd);
   const at = (i: number) => states[i]!;
 
   // One trend point per weigh-in, as before: tissue is the drawn line and the

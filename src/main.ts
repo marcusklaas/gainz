@@ -390,12 +390,18 @@ $("weight-form").addEventListener("submit", async (e) => {
 
 /** Set when the numbers currently in the boxes came from the model. */
 let estimatedBy: string | null = null;
+/** The model's sd on those numbers. Voided together with the tag: typing over
+ *  the numbers breaks the correspondence the sd was judged against. */
+let estimatedSd: number | null = null;
 
 const desc = () => $<HTMLTextAreaElement>("f-desc").value.trim();
 
 for (const id of ["f-kcal", "f-protein"]) {
   // Typing over an estimate makes it the user's number, not the model's.
-  $(id).addEventListener("input", () => (estimatedBy = null));
+  $(id).addEventListener("input", () => {
+    estimatedBy = null;
+    estimatedSd = null;
+  });
 }
 
 $("f-estimate").addEventListener("click", async () => {
@@ -418,6 +424,7 @@ $("f-estimate").addEventListener("click", async () => {
     $<HTMLInputElement>("f-kcal").value = String(est.kcal);
     $<HTMLInputElement>("f-protein").value = String(est.protein_g);
     estimatedBy = cfg.llm.model;
+    estimatedSd = est.kcal_sd ?? null;
     msg("food-msg", "Estimated — edit either number, then Add.", "ok");
   } catch (err) {
     msg("food-msg", (err as Error).message, "err");
@@ -435,9 +442,11 @@ $("food-form").addEventListener("submit", async (e) => {
     kcal: num("f-kcal"),
     protein_g: num("f-protein"),
     ...(estimatedBy ? { model: estimatedBy } : {}),
+    ...(estimatedBy && estimatedSd !== null ? { kcal_sd: estimatedSd } : {}),
   };
   ($("food-form") as HTMLFormElement).reset();
   estimatedBy = null;
+  estimatedSd = null;
   msg("food-msg", "");
   $("f-desc").focus();
   await commit((d) => {
