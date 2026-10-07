@@ -14,6 +14,12 @@ const CHROME_ANDROID =
 const FIREFOX_IOS =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) " +
   "FxiOS/141.0 Mobile/15E148 Safari/605.1.15";
+const SAFARI_MAC =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) " +
+  "Version/26.0 Safari/605.1.15";
+const SAFARI_IPHONE = FIREFOX_IOS.replace("FxiOS/141.0", "Version/26.0");
+const SAFARI_IPAD = SAFARI_IPHONE.replace("iPhone", "iPad");
+const CHROME_IOS = FIREFOX_IOS.replace("FxiOS/141.0", "CriOS/141.0.0.0");
 
 describe("needsDatalistFallback", () => {
   it("covers Firefox on Android, phone and tablet", () => {
@@ -21,9 +27,18 @@ describe("needsDatalistFallback", () => {
     assert.ok(needsDatalistFallback(FIREFOX_TABLET));
   });
 
-  it("leaves every browser that draws its own popup alone", () => {
-    // Firefox on iOS is WebKit underneath, and gets WebKit's datalist with it.
-    for (const ua of [FIREFOX_LINUX, CHROME_ANDROID, FIREFOX_IOS]) {
+  it("covers Safari on Mac, iPhone and iPad, and iOS WebKit browsers", () => {
+    for (const ua of [SAFARI_MAC, SAFARI_IPHONE, SAFARI_IPAD, FIREFOX_IOS, CHROME_IOS]) {
+      assert.ok(needsDatalistFallback(ua), ua);
+    }
+  });
+
+  it("leaves desktop Firefox and Chromium browsers alone", () => {
+    for (const ua of [FIREFOX_LINUX, CHROME_ANDROID,
+      CHROME_ANDROID.replace("Mobile Safari", "Safari"),
+      CHROME_ANDROID + " Edg/141.0.0.0",
+      CHROME_ANDROID + " OPR/120.0.0.0",
+    ]) {
       assert.ok(!needsDatalistFallback(ua), ua);
     }
   });
