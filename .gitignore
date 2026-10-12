@@ -1,3 +1,12 @@
+# docker 
+.ide
+.dockerignore
+deploy
+Dockerfile
+docker/
+configurations/
+
+# original
 node_modules/
 js/
 test-build/

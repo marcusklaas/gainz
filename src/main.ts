@@ -1591,8 +1591,6 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js", { type: "module" }).catch(() => {});
 }
 
-// Nothing on the browsers that draw their own <datalist> popup, which is all of
-// them but one — see src/datalist.ts.
 installDatalistFallback();
 
 void boot();

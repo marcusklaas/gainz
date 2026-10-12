@@ -1,32 +1,8 @@
-// A dropdown for <input list=…> on the browsers that draw none.
-//
-// Firefox for Android exposes the whole datalist DOM interface — the element
-// upgrades, input.list resolves, the options are all there — and has never
-// rendered the popup. Nothing appears as you type, so the exercise field looks
-// like a plain text box that forgot every movement ever logged. That gap is
-// invisible to feature detection precisely because the DOM half is present,
-// which is why the test below is the user agent: there is nothing else to ask.
-//
-// The native element stays in the markup and stays the source of truth. This
-// reads its options at the moment the list is drawn rather than copying them,
-// so whatever repopulates the <datalist> — see the lift screen's render — needs
-// to know nothing about any of this, and every browser that does draw its own
-// popup keeps using it.
-//
-// Touch only: this runs on phones and tablets, so a suggestion is taken by
-// tapping it and there is no arrow-key walk of the list to go with it. The soft
-// keyboard's Enter still belongs to the form, which is where it went before any
-// of this existed — a typed name that matches nothing is a valid answer here.
-
 const MAX_SHOWN = 50;
 
-/**
- * Firefox on Android, and nothing else: Firefox elsewhere renders datalists,
- * and the Android browsers that are not Firefox are Chromium, which does too.
- * `FxiOS` — Firefox on iOS — is WebKit underneath and is not matched here.
- */
 export function needsDatalistFallback(ua: string): boolean {
-  return /Android/.test(ua) && /Firefox\/\d/.test(ua);
+  return (/Android/.test(ua) && /Firefox\/\d/.test(ua)) ||
+    (/AppleWebKit\//.test(ua) && !/(?:Chrome|Chromium|Edg|OPR|SamsungBrowser)\//.test(ua));
 }
 
 /**
@@ -59,6 +35,7 @@ export function suggestions(options: string[], query: string, limit = MAX_SHOWN)
 interface Popup {
   input: HTMLInputElement;
   list: HTMLUListElement;
+  active: number;
 }
 
 let popup: Popup | null = null;
@@ -67,7 +44,7 @@ let popup: Popup | null = null;
 let picking = false;
 
 function listFor(input: HTMLInputElement): string[] {
-  const id = input.getAttribute("list");
+  const id = input.getAttribute("data-datalist") ?? input.getAttribute("list");
   const el = id === null ? null : document.getElementById(id);
   if (!(el instanceof HTMLDataListElement)) return [];
   // An <option> may carry its value as the attribute or as its text.
@@ -75,14 +52,24 @@ function listFor(input: HTMLInputElement): string[] {
 }
 
 function polyfilled(target: EventTarget | null): HTMLInputElement | null {
-  return target instanceof HTMLInputElement && target.hasAttribute("list") ? target : null;
+  if (!(target instanceof HTMLInputElement)) return null;
+  const id = target.getAttribute("list");
+  if (id !== null) {
+    target.setAttribute("data-datalist", id);
+    target.removeAttribute("list");
+    target.setAttribute("role", "combobox");
+    target.setAttribute("aria-autocomplete", "list");
+    target.setAttribute("aria-expanded", "false");
+  }
+  return target.hasAttribute("data-datalist") ? target : null;
 }
 
 function close() {
   if (!popup) return;
   popup.list.remove();
-  popup.input.removeAttribute("aria-expanded");
+  popup.input.setAttribute("aria-expanded", "false");
   popup.input.removeAttribute("aria-controls");
+  popup.input.removeAttribute("aria-activedescendant");
   popup = null;
 }
 
@@ -108,8 +95,8 @@ function pick(value: string) {
   const input = popup.input;
   close();
   input.value = value;
-  input.focus();
   picking = true;
+  input.focus();
   // Both events, in the order a real edit fires them: listeners downstream are
   // written against a user typing, and a value that arrived silently would be
   // the one case they missed.
@@ -129,7 +116,9 @@ function draw(input: HTMLInputElement) {
   list.setAttribute("role", "listbox");
   for (const value of items) {
     const option = document.createElement("li");
+    option.id = `${list.id}-${list.children.length}`;
     option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", "false");
     option.textContent = value;
     list.append(option);
   }
@@ -137,7 +126,7 @@ function draw(input: HTMLInputElement) {
   place(input, list);
   input.setAttribute("aria-expanded", "true");
   input.setAttribute("aria-controls", list.id);
-  popup = { input, list };
+  popup = { input, list, active: -1 };
 }
 
 // -------------------------------------------------------------- installation
@@ -149,8 +138,10 @@ function draw(input: HTMLInputElement) {
  */
 export function installDatalistFallback(ua = navigator.userAgent) {
   if (!needsDatalistFallback(ua)) return;
+  document.querySelectorAll("input[list]").forEach((input) => polyfilled(input));
 
   document.addEventListener("focusin", (e) => {
+    if (picking) return;
     const input = polyfilled(e.target);
     if (input) draw(input);
     else close();
@@ -164,6 +155,36 @@ export function installDatalistFallback(ua = navigator.userAgent) {
 
   document.addEventListener("focusout", (e) => {
     if (polyfilled(e.target)) close();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    const input = polyfilled(event.target);
+    if (!input || event.isComposing) return;
+    if (event.key === "Escape" && popup) {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key === "Enter" && popup?.input === input && popup.active >= 0) {
+      event.preventDefault();
+      const option = popup.list.children[popup.active];
+      if (option?.textContent) pick(option.textContent);
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    if (popup?.input !== input) draw(input);
+    if (!popup) return;
+    event.preventDefault();
+    const count = popup.list.children.length;
+    popup.active = event.key === "ArrowDown"
+      ? (popup.active + 1) % count
+      : (popup.active < 0 ? count - 1 : (popup.active - 1 + count) % count);
+    Array.from(popup.list.children).forEach((option, index) => {
+      option.setAttribute("aria-selected", String(index === popup!.active));
+    });
+    const option = popup.list.children[popup.active]!;
+    input.setAttribute("aria-activedescendant", option.id);
+    option.scrollIntoView({ block: "nearest" });
   });
 
   // The form resetting after a submit leaves the field empty and focused, which
