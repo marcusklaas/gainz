@@ -31,16 +31,14 @@ export const FIELDS: readonly Field[] = [
   ["e-manual-sd", "estimator.manualFoodKcalSdPct", 15],
   ["e-unlogged-sd", "estimator.unloggedDayKcalSd", 750],
   // No smoother knobs: the joint filter fits its own hyperparameters on every
-  // load. levelHalfLifeDays, trendHalfLifeDays and blendFullConfidenceDays
-  // stay in the config shape (stored configs may carry them) but nothing reads
-  // them anymore.
+  // load. Stored configs may still carry the retired keys; withDefaults drops
+  // anything not in this table, so they need no migration.
   ["e-history", "estimator.historyDays", 180],
   // A week. Long enough that the tangent has a visible gradient at any sane
   // chart span, short enough to stay inside the horizon the slope is actually
   // about: its weights have a mean age of eight days, so a projection much
   // longer than that is extrapolating a rate from data older than the forecast.
   ["e-projection", "estimator.projectionDays", 7],
-  ["e-window", "estimator.tdeeWindowDays", 21],
   ["e-bias-gain", "estimator.biasGain", 0.3],
   ["e-bias-leak", "estimator.biasLeak", 0.96],
   ["e-bias-max", "estimator.biasMaxKcal", 900],
