@@ -236,21 +236,21 @@ let chartModule: Promise<typeof import("./chart.js")> | null = null;
  */
 async function paintChart(): Promise<void> {
   const { drawCalories, drawE1rm, drawStrength, drawTrend } = await (chartModule ??= import("./chart.js"));
-  // Every view opens on exactly what the headline under it is built from: for
-  // weight, the days of intake the TDEE fit averaged plus the week the slope
-  // says comes next; for strength, the window the panel fit is computed over;
-  // for calories, that same strength window, so the two pictures below the
-  // weight chart tell the same stretch of time.
+  // Every view opens on the same stretch of time: the strength window. For
+  // strength it is the window the panel fit is computed over; for calories it
+  // shares that window by design; and the weight chart now opens on it too —
+  // the TDEE fit no longer has a window of its own to open on, since the joint
+  // filter runs over the whole loaded history.
   const cfg = cachedConfig();
   const e = cfg?.estimator;
+  const windowDays = cfg?.strength.windowDays ?? 42;
   drawTrend($("chart"), latest?.samples ?? [], latest?.trendLine ?? [], {
-    historyDays: e?.tdeeWindowDays ?? 21,
+    historyDays: windowDays,
     projectionDays: e?.projectionDays ?? 0,
   });
   // One movement in the basket shows its own e1RM in kg; anything else shows
   // the pooled index. The kg class widens the legend slot, which reads
   // "250.0 kg" where the index reads "248.3".
-  const windowDays = cfg?.strength.windowDays ?? 42;
   const single = latestSingle;
   $("strength-chart").classList.toggle("kg", single !== null);
   if (single !== null) {

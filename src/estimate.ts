@@ -189,9 +189,6 @@ export interface Estimate {
   kgPerWeek: number | null;
   tdee: number;
   countedDays: number;
-  /** How far back intake is averaged. No longer bounds the weight trend, which
-   *  the smoother carries over the whole history. */
-  windowDays: number;
   /** The band as displayed: the corrected target, half the window either side. */
   kcalLower: number;
   kcalUpper: number;
@@ -446,7 +443,6 @@ export function estimate(
     kgPerWeek: samples.length < 2 ? null : last.slope * DAYS_PER_WEEK,
     tdee: at(states.length - 1)!.tdee,
     countedDays: counted.length,
-    windowDays: e.tdeeWindowDays,
     kcalLower: targetKcal - half,
     kcalUpper: targetKcal + half,
     goalKcal: goal,

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { defaultConfig } from "../src/config.js";
+import { defaultConfig, withDefaults } from "../src/config.js";
 import { addDays } from "../src/dates.js";
 import {
   calorieSeries,
@@ -468,6 +468,16 @@ describe("estimate", () => {
     assert.equal(e.unloggedDayKcalSd, 750);
   });
 
+  it("drops the retired estimator settings even when a stored config carries them", () => {
+    const stored = withDefaults({
+      estimator: { levelHalfLifeDays: 10, trendHalfLifeDays: 28, blendFullConfidenceDays: 14, tdeeWindowDays: 21 },
+    });
+    for (const key of ["levelHalfLifeDays", "trendHalfLifeDays", "blendFullConfidenceDays", "tdeeWindowDays"]) {
+      assert.ok(!(key in stored.estimator), `${key} should not survive withDefaults`);
+      assert.ok(!(key in defaultConfig().estimator), `${key} should not be a default`);
+    }
+  });
+
   it("trusts the scale more when manual food is noisier", () => {
     // The mirror of the scale test: noisy intake widens the tissue posterior,
     // so the Kalman gain leans on the scale instead and a last-day spike pulls
@@ -723,11 +733,10 @@ describe("estimate", () => {
     close(e.proteinTarget, 128, 1e-9);
   });
 
-  it("reports the window it used and hands back the raw and smoothed series", () => {
-    const cfg = config({ tdeeWindowDays: 21 });
+  it("hands back the raw and smoothed series", () => {
+    const cfg = config();
     const days = history(60, (i) => ({ items: [], weight_kg: 80 + i * 0.01 }));
     const e = estimate(cfg, days, today)!;
-    assert.equal(e.windowDays, 21);
     assert.equal(e.samples.length, 60);
     assert.equal(e.trendLine.length, 60);
     assert.equal(e.trendKg, e.trendLine[e.trendLine.length - 1]!.kg);

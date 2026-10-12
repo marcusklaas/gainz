@@ -195,16 +195,10 @@ export interface Config {
   };
   goal: Goal;
   estimator: {
-    /** Holt level half-life: how fast the smoothed weight follows the scale. */
-    levelHalfLifeDays: number;
-    /** Holt trend half-life: how fast the estimated slope adapts. Longer is calmer. */
-    trendHalfLifeDays: number;
     /** How far back to load. Warms up the smoother and sets the chart span. */
     historyDays: number;
     /** How far past the last weigh-in the chart carries the current slope. 0 hides it. */
     projectionDays: number;
-    tdeeWindowDays: number;
-    blendFullConfidenceDays: number;
     activityFactor: number;
     /** Scale display step in grams. Readings are rounded to it, so the error is
      *  uniform over half a step either way; the filter treats it as Gaussian
