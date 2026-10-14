@@ -18,6 +18,7 @@ import { addDays, atTime, monthOf, parseDay, toDayKey } from "./dates.js";
 import {
   dayKcal,
   dayProtein,
+  displayBand,
   estimate,
   fitHyperFor,
   tissueAt,
@@ -304,6 +305,11 @@ function now(cfg: Config, days: Map<DayKey, Day>, today: DayKey, hyper: JointHyp
   const lines: string[] = [`## Where things stand on ${today}`, ""];
 
   if (est) {
+    // Same rule as the on-screen band: centred on today's stored goal, so a
+    // moved offset setting never restates what today was judged against.
+    // Today is previewable: if it somehow has no pin yet, show the live band.
+    const band = displayBand(cfg, est, days.get(today)?.goal_kcal, true)!;
+    const goal = days.get(today)?.goal_kcal ?? est.goalKcal;
     lines.push(
       `- Smoothed weight ${est.trendKg.toFixed(1)} kg` +
         (est.kgPerWeek === null
@@ -311,8 +317,8 @@ function now(cfg: Config, days: Map<DayKey, Day>, today: DayKey, hyper: JointHyp
           : `, moving ${est.kgPerWeek >= 0 ? "+" : ""}${est.kgPerWeek.toFixed(2)} kg/week`),
       `- TDEE ${Math.round(est.tdee)} kcal` +
         `, from ${est.countedDays} counted days (joint filter, all intake)`,
-      `- Today's band ${Math.round(est.kcalLower)}–${Math.round(est.kcalUpper)} kcal;` +
-        ` uncorrected goal ${Math.round(est.goalKcal)}, bias ${est.bias.kcal >= 0 ? "+" : ""}${Math.round(est.bias.kcal)} kcal over ${est.bias.days} counted days`,
+      `- Today's band ${Math.round(band.kcalLower)}–${Math.round(band.kcalUpper)} kcal;` +
+        ` uncorrected goal ${Math.round(goal)}, bias ${est.bias.kcal >= 0 ? "+" : ""}${Math.round(est.bias.kcal)} kcal over ${est.bias.days} counted days`,
       `- Protein target ${Math.round(est.proteinTarget)} g/day`,
     );
   } else {
