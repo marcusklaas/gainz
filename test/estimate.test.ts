@@ -7,8 +7,10 @@ import { defaultConfig, withDefaults } from "../src/config.js";
 import { addDays } from "../src/dates.js";
 import {
   calorieSeries,
+  correctedTarget,
   dayKcal,
   dayProtein,
+  displayBand,
   estimate,
   holtSeries,
   mifflinBmr,
@@ -636,6 +638,61 @@ describe("estimate", () => {
       const e = estimate(cfg, days, today)!;
       assert.ok(e.bias.kcal > 0, "the bias is still accumulated, just not applied");
       close(e.targetKcal, e.goalKcal, 1e-9);
+    });
+  });
+
+  describe("displayBand", () => {
+    it("ignores a moved offset once the day has a stored goal", () => {
+      // Sixty days pinned at 2600. Moving the offset moves the live candidate
+      // for the *next* pin, but the band shown for the stored day must not move.
+      const days = history(60, () => ({ ...logged(2600, 2600), weight_kg: 80 }));
+      const before = estimate(config({ biasGain: 0 }, { kcalOffset: 0 }), days, today)!;
+      const after = estimate(config({ biasGain: 0 }, { kcalOffset: 500 }), days, today)!;
+      assert.ok(Math.abs(after.goalKcal - before.goalKcal) > 100, "premise: the offset moves the live goal");
+
+      const a = displayBand(config(), before, 2600)!;
+      const b = displayBand(config(), after, 2600)!;
+      close(a.targetKcal, 2600, 1e-9);
+      close(b.targetKcal, 2600, 1e-9);
+      close(b.kcalLower, 2600 - 200, 1e-9);
+      close(b.kcalUpper, 2600 + 200, 1e-9);
+    });
+
+    it("keeps the bias correction on the stored goal", () => {
+      // Persistent overeating against a stored 2600: the displayed centre sits
+      // below the stored goal by exactly gain times the bias.
+      const cfg = config();
+      const days = history(60, () => ({ ...logged(3000, 2600), weight_kg: 80 }));
+      const e = estimate(cfg, days, today)!;
+      assert.ok(e.bias.kcal > 0, "premise: overeating builds a positive bias");
+
+      const band = displayBand(cfg, e, 2600)!;
+      close(
+        band.targetKcal,
+        correctedTarget(2600, e.bias.kcal, e.bmr, cfg.estimator.biasGain),
+        1e-9,
+      );
+      assert.ok(band.targetKcal < 2600, "the correction must still push down");
+      close(band.kcalUpper - band.kcalLower, cfg.goal.kcalWindow, 1e-9);
+    });
+
+    it("shows nothing for a past day with no stored goal", () => {
+      // History from before goals were pinned: no fabrication from the live
+      // offset, just null for the caller to dash.
+      const cfg = config({}, { kcalOffset: 500 });
+      const days = history(60, () => ({ ...logged(2600, 2600), weight_kg: 80 }));
+      const e = estimate(cfg, days, today)!;
+      assert.equal(displayBand(cfg, e, undefined), null);
+    });
+
+    it("previews the live band for a day not yet pinnable", () => {
+      const cfg = config();
+      const days = history(60, () => ({ ...logged(2600, 2600), weight_kg: 80 }));
+      const e = estimate(cfg, days, today)!;
+      const band = displayBand(cfg, e, undefined, true)!;
+      close(band.targetKcal, e.targetKcal, 1e-9);
+      close(band.kcalLower, e.kcalLower, 1e-9);
+      close(band.kcalUpper, e.kcalUpper, 1e-9);
     });
   });
 

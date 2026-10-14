@@ -167,7 +167,7 @@ function accumulate(counted: Counted[], e: Config["estimator"]): Bias {
  * physiological line rather than a picked number, and no correction has any
  * business pushing a target below it.
  */
-function correctedTarget(goal: number, bias: number, bmr: number, gain: number) {
+export function correctedTarget(goal: number, bias: number, bmr: number, gain: number) {
   return Math.max(goal - gain * bias, bmr);
 }
 
@@ -188,6 +188,8 @@ export interface Estimate {
    *  distinguishable, which is the one thing every caller branches on. */
   kgPerWeek: number | null;
   tdee: number;
+  /** BMR behind the displayed target: what floors the bias correction. */
+  bmr: number;
   countedDays: number;
   /** The band as displayed: the corrected target, half the window either side. */
   kcalLower: number;
@@ -428,9 +430,11 @@ export function estimate(
     if (kcal !== null) counted.push({ day: d, kcal, goal: days.get(d)!.goal_kcal });
   }
 
-  // The band keeps its width; only its centre moves. The goal is what today is
-  // judged against and what gets recorded — never the shifted target, which
-  // would make the correction cancel itself out the moment it took effect.
+  // The band keeps its width; only its centre moves. The goal is the live
+  // candidate for pinning a new day's stored target — never the shifted
+  // target, which would make the correction cancel itself out the moment it
+  // took effect. What a day is judged against is its stored goal through
+  // displayBand, so moving the offset never repaints an old day.
   const goal = at(states.length - 1)!.tdee + cfg.goal.kcalOffset;
   const half = cfg.goal.kcalWindow / 2;
   const bias = accumulate(counted, e);
@@ -442,6 +446,7 @@ export function estimate(
     trendKg,
     kgPerWeek: samples.length < 2 ? null : last.slope * DAYS_PER_WEEK,
     tdee: at(states.length - 1)!.tdee,
+    bmr,
     countedDays: counted.length,
     kcalLower: targetKcal - half,
     kcalUpper: targetKcal + half,
@@ -450,6 +455,32 @@ export function estimate(
     bias,
     proteinTarget: trendKg * cfg.goal.proteinGPerKg,
   };
+}
+
+/**
+ * The band to display for a day: the bias correction applied to that day's
+ * stored goal rather than to today's live TDEE-plus-offset. The offset only
+ * pins new days' `goal_kcal` (see recordGoal); reading it here as well would
+ * repaint every old day whenever the setting moves. The bias itself is already
+ * offset-free — it accumulates intake against stored goals — so it is reused
+ * as-is. A past day with no stored goal (history from before goals were
+ * pinned) has no band: null, never a live-offset fabrication. `preview` is
+ * only for days not yet pinnable — today before its first pin, tomorrow —
+ * which show the live band until the pin lands.
+ */
+export function displayBand(
+  cfg: Config,
+  est: Estimate,
+  storedGoal: number | undefined,
+  preview = false,
+): { targetKcal: number; kcalLower: number; kcalUpper: number } | null {
+  if (storedGoal === undefined) {
+    if (!preview) return null;
+    return { targetKcal: est.targetKcal, kcalLower: est.kcalLower, kcalUpper: est.kcalUpper };
+  }
+  const targetKcal = correctedTarget(storedGoal, est.bias.kcal, est.bmr, cfg.estimator.biasGain);
+  const half = cfg.goal.kcalWindow / 2;
+  return { targetKcal, kcalLower: targetKcal - half, kcalUpper: targetKcal + half };
 }
 
 // ---------------------------------------------------------- calories chart

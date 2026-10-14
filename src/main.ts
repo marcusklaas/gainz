@@ -5,6 +5,7 @@ import {
   calorieSeries,
   dayKcal,
   dayProtein,
+  displayBand,
   estimate,
   WEEK_DAYS,
   weekSummary,
@@ -548,7 +549,7 @@ async function render(src: Source = "server"): Promise<void> {
   // on screen fast, and a number derived from a stale month is not one to write
   // down permanently as what today was judged against.
   if (est && src === "server") await recordGoal(d, est);
-  renderGoals(d, est);
+  renderGoals(d, est, cfg, day >= today);
   renderWeek(await week, est);
 }
 
@@ -800,7 +801,7 @@ function bar(id: string, fraction: number, state: string): void {
   e.className = state;
 }
 
-function renderGoals(d: Day, est: Estimate | null): void {
+function renderGoals(d: Day, est: Estimate | null, cfg: Config, preview: boolean): void {
   latest = est;
   if (!$("trend").hidden) void paintChart();
 
@@ -818,21 +819,32 @@ function renderGoals(d: Day, est: Estimate | null): void {
   bar("p-fill", protein / est.proteinTarget, hit ? "hit" : "");
   $("p-note").textContent = hit ? "Protein hit ✓" : `${round(est.proteinTarget - protein)} g to go`;
 
-  const kcal = dayKcal(d);
-  const scale = Math.max(est.kcalUpper * 1.15, kcal * 1.05);
-  $("k-nums").textContent = `${round(kcal)}  [${round(est.kcalLower)} – ${round(est.kcalUpper)}]`;
-  bar("k-fill", kcal / scale, kcal > est.kcalUpper ? "over" : kcal >= est.kcalLower ? "hit" : "");
-  $("k-band").style.left = `${(est.kcalLower / scale) * 100}%`;
-  $("k-band").style.width = `${((est.kcalUpper - est.kcalLower) / scale) * 100}%`;
+  // The band is centred on this day's stored goal, not on today's live
+  // TDEE-plus-offset: the offset pins new goals, it never repaints old ones.
+  // A past day that never pinned one shows a dash rather than a fabrication.
+  const band = displayBand(cfg, est, d.goal_kcal, preview);
+  if (!band) {
+    $("k-nums").textContent = DASH;
+    $("k-note").textContent = "No goal was recorded that day.";
+    bar("k-fill", 0, "");
+    $("k-band").style.width = "0%";
+  } else {
+    const kcal = dayKcal(d);
+    const scale = Math.max(band.kcalUpper * 1.15, kcal * 1.05);
+    $("k-nums").textContent = `${round(kcal)}  [${round(band.kcalLower)} – ${round(band.kcalUpper)}]`;
+    bar("k-fill", kcal / scale, kcal > band.kcalUpper ? "over" : kcal >= band.kcalLower ? "hit" : "");
+    $("k-band").style.left = `${(band.kcalLower / scale) * 100}%`;
+    $("k-band").style.width = `${((band.kcalUpper - band.kcalLower) / scale) * 100}%`;
 
-  // Over the top of the range says so and stops. No deficit is carried and no
-  // catch-up is suggested — a cheat day is just a cheat day. See spec.md.
-  $("k-note").textContent =
-    kcal > est.kcalUpper
-      ? "Over for today. Reset tomorrow."
-      : kcal >= est.kcalLower
-        ? `In range · room for ${round(est.kcalUpper - kcal)} more`
-        : `${round(est.kcalLower - kcal)} more to reach range · ${round(est.kcalUpper - kcal)} to spare`;
+    // Over the top of the range says so and stops. No deficit is carried and no
+    // catch-up is suggested — a cheat day is just a cheat day. See spec.md.
+    $("k-note").textContent =
+      kcal > band.kcalUpper
+        ? "Over for today. Reset tomorrow."
+        : kcal >= band.kcalLower
+          ? `In range · room for ${round(band.kcalUpper - kcal)} more`
+          : `${round(band.kcalLower - kcal)} more to reach range · ${round(band.kcalUpper - kcal)} to spare`;
+  }
 
   // Today carries only what bears on today's targets; the trend lives on Trend.
   $("stats").textContent = `TDEE ${round(est.tdee)}`;
