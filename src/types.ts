@@ -9,13 +9,13 @@ export const DAYS_PER_WEEK = 7;
 export const MIFFLIN = { weight: 10, height: 6.25, age: 5, maleOffset: 5, femaleOffset: -161 };
 
 /**
- * Epley's divisor: e1RM = weight × (1 + reps / 30). Which formula is used
- * barely matters here — Brzycki and Lombardi land within a point of it over ten
- * weeks, because almost every set in the log is at the same reps and the rep
- * term cancels between two sessions that share them. Epley is the one people
- * recognise.
+ * Wathen (1994) published coefficients:
+ *   e1RM = 100 × weight / (48.8 + 53.8 × e^(-0.075 × reps))
+ *
+ * Replaces Epley: the exponential curve tracks rep-max falloff better across
+ * rep ranges and flattens out instead of climbing linearly on high-rep sets.
  */
-export const EPLEY_REPS = 30;
+export const WATHEN = { base: 48.8, scale: 53.8, decay: 0.075 };
 
 /** Local calendar date, "YYYY-MM-DD". Never a UTC timestamp. */
 export type DayKey = string;
@@ -220,6 +220,8 @@ export interface Config {
   strength: {
     /** How far back the strength verdict and its decomposition are fitted. */
     windowDays: number;
+    /** Transitions after baseline before a new exercise reaches 50% weight in `si`. <= 0 disables ramp-up. */
+    rampHalfLife: number;
   };
   llm: { provider: Provider; model: string };
   notifications: Notifications;

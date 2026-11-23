@@ -4,10 +4,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { defaultConfig, withDefaults } from "../src/config.js";
 import { addDays } from "../src/dates.js";
 import {
   confirmedSets,
   draftOf,
+  e1rm,
   e1rmPoints,
   elapsedSec,
   exerciseKey,
@@ -21,6 +23,7 @@ import {
   nextUpIndex,
   panelFit,
   propagateWeight,
+  rampWeight,
   selectExercises,
   sessionsOf,
   singleKey,
@@ -32,7 +35,7 @@ import {
   type DatedSession,
   type LiftPoint,
 } from "../src/lifts.js";
-import { EPLEY_REPS, type Day, type DayKey, type Draft, type DraftExercise, type Session } from "../src/types.js";
+import { WATHEN, type Day, type DayKey, type Draft, type DraftExercise, type Session } from "../src/types.js";
 
 // --------------------------------------------------------------- fixtures
 
@@ -61,7 +64,8 @@ const session = (
 
 const dated = (day: DayKey, s: Session): DatedSession => ({ day, session: s });
 
-const epley = (weight: number, reps: number) => weight * (1 + reps / EPLEY_REPS);
+const wathen = (weight: number, reps: number) =>
+  (100 * weight) / (WATHEN.base + WATHEN.scale * Math.exp(-WATHEN.decay * reps));
 
 /** A lift point straight from a level, skipping the session plumbing. */
 const point = (day: DayKey, key: string, e1rm: number): LiftPoint => ({
@@ -421,22 +425,60 @@ describe("propagateWeight", () => {
 
 // ------------------------------------------------------------- e1RM
 
+describe("e1rm", () => {
+  it("computes the Wathen (1994) formula", () => {
+    close(e1rm(100, 5), 10000 / (48.8 + 53.8 * Math.exp(-0.375)), 1e-9);
+    close(e1rm(100, 10), 10000 / (48.8 + 53.8 * Math.exp(-0.75)), 1e-9);
+  });
+
+  it("scales proportionally with weight and flattens at high reps", () => {
+    close(e1rm(200, 8), 2 * e1rm(100, 8), 1e-9);
+    assert.ok(e1rm(100, 12) > e1rm(100, 8));
+    // Asymptotes to 100 / 48.8 × weight instead of growing linearly like Epley.
+    assert.ok(e1rm(100, 50) < (100 * 100) / 48.8);
+  });
+});
+
+describe("rampWeight", () => {
+  it("reaches 0.50 exactly at n = 1 + halfLife", () => {
+    assert.equal(rampWeight(5, 4.0), 0.5);
+    assert.equal(rampWeight(4.5, 3.5), 0.5);
+    assert.equal(rampWeight(8, 3.5), 0.75);
+    close(rampWeight(2, 3.5), 1 - 2 ** (-1 / 3.5), 1e-12);
+  });
+
+  it("is 0 on baseline (n = 1) and 1.0 when ramp-up is disabled", () => {
+    assert.equal(rampWeight(1, 3.5), 0);
+    assert.equal(rampWeight(1, 0), 0);
+    assert.equal(rampWeight(2, 0), 1);
+    assert.equal(rampWeight(2, -3.5), 1);
+    assert.equal(rampWeight(2, null), 1);
+    assert.equal(rampWeight(2, undefined), 1);
+  });
+
+  it("defaults to 3.5 in config and preserves 0 as an explicit opt-out", () => {
+    assert.equal(defaultConfig().strength.rampHalfLife, 3.5);
+    assert.equal(withDefaults({ strength: { rampHalfLife: 0 } }).strength.rampHalfLife, 0);
+    assert.equal(withDefaults({ strength: { rampHalfLife: 5 } }).strength.rampHalfLife, 5);
+  });
+});
+
 describe("e1rmPoints", () => {
-  it("uses the Epley e1RM of the best set, not the last or the average", () => {
+  it("uses the Wathen e1RM of the best set, not the last or the average", () => {
     const list = [dated(on(0), session({ bench: [[60, 10], [100, 5], [80, 5]] }))];
     const [p] = e1rmPoints(list);
-    close(Math.exp(p!.x), epley(100, 5), 1e-9);
+    close(Math.exp(p!.x), wathen(100, 5), 1e-9);
   });
 
   it("compares sets by e1RM rather than by weight", () => {
-    // 90×8 is a better set than 100×3: 114 against 110.
+    // 90×8 is a better set than 100×3: ~115 against ~109.
     const list = [dated(on(0), session({ bench: [[100, 3], [90, 8]] }))];
-    close(Math.exp(e1rmPoints(list)[0]!.x), epley(90, 8), 1e-9);
+    close(Math.exp(e1rmPoints(list)[0]!.x), wathen(90, 8), 1e-9);
   });
 
   it("ignores sets with no load and sets with no reps", () => {
     const list = [dated(on(0), session({ dips: [[0, 12], [20, 6]] }))];
-    close(Math.exp(e1rmPoints(list)[0]!.x), epley(20, 6), 1e-9);
+    close(Math.exp(e1rmPoints(list)[0]!.x), wathen(20, 6), 1e-9);
 
     const noReps = [dated(on(0), session({ bench: [[100, 0]] }))];
     assert.deepEqual(e1rmPoints(noReps), []);
@@ -454,7 +496,7 @@ describe("e1rmPoints", () => {
     ];
     const points = e1rmPoints(list);
     assert.equal(points.length, 1);
-    close(Math.exp(points[0]!.x), epley(110, 5), 1e-9);
+    close(Math.exp(points[0]!.x), wathen(110, 5), 1e-9);
   });
 
   it("keeps that rule when the better session came first", () => {
@@ -462,7 +504,7 @@ describe("e1rmPoints", () => {
       dated(on(0), session({ bench: [[110, 5]] }, { at: "2026-01-01T08:00:00.000Z" })),
       dated(on(0), session({ bench: [[100, 5]] }, { at: "2026-01-01T18:00:00.000Z" })),
     ];
-    close(Math.exp(e1rmPoints(list)[0]!.x), epley(110, 5), 1e-9);
+    close(Math.exp(e1rmPoints(list)[0]!.x), wathen(110, 5), 1e-9);
   });
 
   it("folds spellings onto one key while keeping a name for display", () => {
@@ -561,8 +603,8 @@ describe("strengthIndex", () => {
       point(on(21), "bench", 118),
     ];
     for (let n = 1; n <= points.length; n++) {
-      const prefix = strengthIndex(points.slice(0, n));
-      const full = strengthIndex(points).slice(0, prefix.length);
+      const prefix = strengthIndex(points.slice(0, n), 3.5);
+      const full = strengthIndex(points, 3.5).slice(0, prefix.length);
       assert.deepEqual(prefix, full, `history changed under ${n} points`);
     }
   });
@@ -579,6 +621,50 @@ describe("strengthIndex", () => {
       point(on(7), "bench", 126),
     ];
     assert.deepEqual(strengthIndex(points).map((p) => p.day), [on(0), on(7)]);
+  });
+
+  it("reproduces the unweighted index in the small half-life limit and for <= 0 / null", () => {
+    // Bench is established (6 prior sessions), deadlift enters late with a big jump.
+    const points: LiftPoint[] = [];
+    for (let i = 0; i < 8; i++) points.push(point(on(i * 7), "bench", 100 + i));
+    points.push(point(on(35), "deadlift", 100));
+    points.push(point(on(42), "deadlift", 130));
+    points.push(point(on(49), "deadlift", 145));
+    points.sort((a, b) => a.day.localeCompare(b.day));
+
+    const unweighted = strengthIndex(points);
+    const limit = strengthIndex(points, 1e-9);
+    assert.equal(limit.length, unweighted.length);
+    for (let i = 0; i < unweighted.length; i++) {
+      close(limit[i]!.x, unweighted[i]!.x, 1e-6, `day ${unweighted[i]!.day}`);
+    }
+    assert.deepEqual(strengthIndex(points, 0), unweighted);
+    assert.deepEqual(strengthIndex(points, -2), unweighted);
+    assert.deepEqual(strengthIndex(points, null), unweighted);
+  });
+
+  it("weights a newly introduced exercise by 1 - 2^(-(n - 1) / h) on entry", () => {
+    const h = 3.5;
+    // Bench is flat for 10 sessions (n = 1..10). New lift enters on session 9 (n = 1,
+    // baseline: moves si by 0) and jumps +30% on session 10 (n = 2).
+    const points: LiftPoint[] = [];
+    for (let i = 0; i < 10; i++) points.push(point(on(i * 7), "bench", 100));
+    points.push(point(on(8 * 7), "new_lift", 100)); // n = 1 on day 56
+    points.push(point(on(9 * 7), "new_lift", 130)); // n = 2 on day 63
+    points.sort((a, b) => a.day.localeCompare(b.day));
+
+    const weighted = strengthIndex(points, h);
+    const unweighted = strengthIndex(points, 0);
+
+    // Day 56 (n = 1 for new_lift): baseline moves si by 0.
+    close(weighted[8]!.x, 0, 1e-12, "new exercise baseline moves si by 0");
+
+    // Day 63: bench has n = 10 (delta = 0, dt = 7), new_lift has n = 2 (delta = ln(1.3), dt = 7).
+    const wBench = 1 - 2 ** (-9 / h);
+    const wNew = 1 - 2 ** (-1 / h);
+    const expected = (wNew * Math.log(1.3)) / (wBench + wNew);
+    close(weighted[9]!.x, expected, 1e-12, "day 63 weighted delta");
+    assert.ok(weighted[9]!.x < unweighted[9]!.x, "early motor-learning jump is dampened");
   });
 });
 
@@ -710,9 +796,9 @@ describe("strengthOf", () => {
     assert.deepEqual(strengthOf([], on(0), 42).index, []);
   });
 
-  it("agrees with its parts", () => {
-    const s = strengthOf(list, on(35), 42);
-    assert.deepEqual(s.index, strengthIndex(e1rmPoints(list)));
+  it("agrees with its parts and forwards rampHalfLife to strengthIndex", () => {
+    const s = strengthOf(list, on(35), 42, 3.5);
+    assert.deepEqual(s.index, strengthIndex(e1rmPoints(list), 3.5));
     assert.ok(s.fit!.perDay > 0, "a history of adding weight every week is progress");
   });
 });

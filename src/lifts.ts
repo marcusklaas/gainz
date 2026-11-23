@@ -3,7 +3,7 @@
 // takes: no storage, no DOM, nothing derived persisted.
 import { addDays, atKey, daysBetween } from "./dates.js";
 import {
-  EPLEY_REPS,
+  WATHEN,
   type Day,
   type DayKey,
   type Draft,
@@ -308,6 +308,29 @@ export function summarise(s: Session): string {
 // in, a trend and an honest error bar out. See STRENGTH.md for what was
 // measured, what was rejected, and what is still unverified.
 
+/** Wathen e1RM for one performed set: `100 × weight / (48.8 + 53.8 × e^(-0.075 × reps))`. */
+export const e1rm = (weightKg: number, reps: number): number =>
+  (100 * weightKg) / (WATHEN.base + WATHEN.scale * Math.exp(-WATHEN.decay * reps));
+
+/**
+ * Exponential ramp-up weight for an exercise's `n`-th chronological appearance
+ * (`n` is 1-indexed across full history):
+ *
+ *     w(n) = 1 - 2^(-(n - 1) / h)
+ *
+ * Baseline (`n = 1`) carries weight 0 (and produces no transition). At
+ * `n = 1 + h`, the weight reaches 0.50 exactly; as `n` grows it approaches 1.0
+ * asymptotically, easing newly introduced lifts into the index so early
+ * motor-learning jumps do not inflate it. A missing or non-positive half-life
+ * disables ramp-up and falls back to unweighted pooling (1.0 for every
+ * transition).
+ */
+export function rampWeight(sessionCount: number, halfLife?: number | null): number {
+  if (sessionCount <= 1) return 0;
+  if (halfLife == null || !Number.isFinite(halfLife) || halfLife <= 0) return 1;
+  return 1 - 2 ** (-(sessionCount - 1) / halfLife);
+}
+
 /** One exercise on one day: the atom everything below is built from. */
 export interface LiftPoint {
   day: DayKey;
@@ -315,7 +338,7 @@ export interface LiftPoint {
   key: string;
   /** The spelling used that day, for display. */
   name: string;
-  /** log of the best set's Epley e1RM. */
+  /** log of the best set's Wathen e1RM. */
   x: number;
 }
 
@@ -346,7 +369,7 @@ export function e1rmPoints(list: DatedSession[]): LiftPoint[] {
       const top = Math.max(
         0,
         ...ex.sets.filter((s) => s.weight_kg > 0 && s.reps > 0)
-          .map((s) => s.weight_kg * (1 + s.reps / EPLEY_REPS)),
+          .map((s) => e1rm(s.weight_kg, s.reps)),
       );
       if (!top) continue;
 
@@ -375,8 +398,8 @@ export interface IndexPoint {
 /**
  * The chained index:
  *
- *     SI += (Σ log-change of the exercises trained)
- *           ÷ (Σ exercise-days that covers)
+ *     SI += (Σ w_i · log-change of the exercises trained)
+ *           ÷ (Σ w_i · exercise-days that covers)
  *           × (days since the previous session)
  *
  * The pooled rate at which the things you actually trained are improving,
@@ -384,15 +407,22 @@ export interface IndexPoint {
  * be matched against and so contributes nothing: it can join the index, never
  * move it. That is what makes adding exercises unable to inflate anything.
  *
- * The denominator is exercise-days rather than the size of the basket. The two
- * are identical whenever everything is trained on the same cadence, and part
- * company when cadences differ — which is the real case. An exercise drifting
- * toward the back of the rotation keeps occupying a slot in a basket-sized
- * denominator while contributing no change, which understates the rate badly.
- * Dividing by the time actually covered is self-normalising: an exercise counts
- * exactly when, and as much as, it informs. It costs some wander, and that is
- * the better trade — a bias makes the number wrong, wander only makes it
- * imprecise, and the verdict below carries its own error bar regardless.
+ * When `rampHalfLife > 0`, each transition carries `w_i = rampWeight(n_i, h)`,
+ * where `n_i` is the exercise's 1-indexed appearance count across the full
+ * history passed in — easing newly added movements in over several sessions so
+ * early motor-learning jumps do not dominate established lifts. Passing null,
+ * undefined or `<= 0` falls back to `w_i = 1` (unweighted pooling).
+ *
+ * The denominator is weighted exercise-days rather than the size of the basket.
+ * The two are identical whenever everything is trained on the same cadence, and
+ * part company when cadences differ — which is the real case. An exercise
+ * drifting toward the back of the rotation keeps occupying a slot in a
+ * basket-sized denominator while contributing no change, which understates the
+ * rate badly. Dividing by the time actually covered is self-normalising: an
+ * exercise counts exactly when, and as much as, it informs. It costs some
+ * wander, and that is the better trade — a bias makes the number wrong, wander
+ * only makes it imprecise, and the verdict below carries its own error bar
+ * regardless.
  *
  * The level has no absolute meaning and by construction cannot acquire one: it
  * is defined only up to an additive constant. It answers "how much stronger
@@ -402,26 +432,30 @@ export interface IndexPoint {
  * Every link reads only data at or before its own day, so yesterday's value
  * never moves when today is logged.
  */
-export function strengthIndex(points: LiftPoint[]): IndexPoint[] {
+export function strengthIndex(points: LiftPoint[], rampHalfLife?: number | null): IndexPoint[] {
   const out: IndexPoint[] = [];
-  const previous = new Map<string, LiftPoint>();
+  const previous = new Map<string, { point: LiftPoint; count: number }>();
   let si = 0;
   let before: DayKey | null = null;
 
   for (const today of byDay(points)) {
     const day = today[0]!.day;
-    let change = 0; // Σ log-change over the matched exercises
-    let covered = 0; // Σ days each of those matches spans
+    let change = 0; // Σ w · log-change over the matched exercises
+    let covered = 0; // Σ w · days each of those matches spans
 
     for (const p of today) {
       const was = previous.get(p.key);
       if (!was) continue;
-      change += p.x - was.x;
-      covered += daysBetween(was.day, day);
+      const w = rampWeight(was.count + 1, rampHalfLife);
+      change += w * (p.x - was.point.x);
+      covered += w * daysBetween(was.point.day, day);
     }
     if (covered > 0 && before) si += (change / covered) * daysBetween(before, day);
 
-    for (const p of today) previous.set(p.key, p);
+    for (const p of today) {
+      const was = previous.get(p.key);
+      previous.set(p.key, { point: p, count: (was?.count ?? 0) + 1 });
+    }
     before = day;
     out.push({ day, x: si });
   }
@@ -527,7 +561,12 @@ export interface Strength {
  * that series — but it is a question for the screen to ask, not for this to
  * answer by picking for you.
  */
-export function strengthOf(list: DatedSession[], today: DayKey, windowDays: number): Strength {
+export function strengthOf(
+  list: DatedSession[],
+  today: DayKey,
+  windowDays: number,
+  rampHalfLife?: number | null,
+): Strength {
   const points = e1rmPoints(list);
   const from = addDays(today, -windowDays);
   // Bounded at both ends. Nothing later than `today` normally exists — the
@@ -536,5 +575,5 @@ export function strengthOf(list: DatedSession[], today: DayKey, windowDays: numb
   // the one it names.
   const recent = points.filter((p) => p.day >= from && p.day <= today);
 
-  return { index: strengthIndex(points), fit: panelFit(recent, windowDays) };
+  return { index: strengthIndex(points, rampHalfLife), fit: panelFit(recent, windowDays) };
 }

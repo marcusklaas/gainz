@@ -28,6 +28,7 @@ import {
 } from "./estimate.js";
 import type { JointHyper } from "./joint3.js";
 import {
+  e1rm,
   e1rmPoints,
   fitTotal,
   panelFit,
@@ -38,7 +39,7 @@ import {
   type IndexPoint,
   type LiftPoint,
 } from "./lifts.js";
-import { EPLEY_REPS, type Config, type Day, type DayKey } from "./types.js";
+import type { Config, Day, DayKey } from "./types.js";
 
 /**
  * How much of each thing goes in. Constants rather than config: these are the
@@ -123,7 +124,7 @@ const setsIn = (d: Day): number =>
 const topE1rm = (sets: { weight_kg: number; reps: number }[]): number | null => {
   const best = Math.max(
     0,
-    ...sets.filter((s) => s.weight_kg > 0 && s.reps > 0).map((s) => s.weight_kg * (1 + s.reps / EPLEY_REPS)),
+    ...sets.filter((s) => s.weight_kg > 0 && s.reps > 0).map((s) => e1rm(s.weight_kg, s.reps)),
   );
   return best || null;
 };
@@ -278,8 +279,8 @@ function preamble(cfg: Config, today: DayKey, generatedAt: string): string {
     "- `in_band_days` is measured against that day's stored `goal_kcal`. The band",
     "  actually shown in the app is shifted by a slow bias correction, so the two",
     "  can differ while intake is persistently off target.",
-    "- `top_e1rm_kg` is Epley (`weight × (1 + reps/30)`) on the best set of that",
-    "  exercise that day. It is a proxy, not a tested max.",
+    "- `top_e1rm_kg` is Wathen (`100 × weight / (48.8 + 53.8 × e^(-0.075 × reps))`)",
+    "  on the best set of that exercise that day. It is a proxy, not a tested max.",
     "- `pct_per_wk` is percent per week of estimated one-rep max, fitted over that",
     "  exercise's whole history, and blank where there are too few appearances to",
     "  fit one.",
@@ -288,6 +289,14 @@ function preamble(cfg: Config, today: DayKey, generatedAt: string): string {
     "  proportional change, so +0.10 is about +10.5%. The level is arbitrary and",
     "  the first point is zero by construction. A new exercise can join the index",
     "  but cannot move it, so adding movements never inflates progress.",
+    ...(cfg.strength.rampHalfLife > 0
+      ? [
+          "  Exercise log-deltas are pooled with exponential ramp-up weights",
+          `  \`1 - 2^(-(n - 1) / h)\` with ramp half-life \`h = ${cfg.strength.rampHalfLife}\` sessions`,
+          "  (`n` is the exercise's 1-indexed appearance count across full history),",
+          "  dampening early motor-learning jumps.",
+        ]
+      : []),
     "- Food `kcal` and `protein_g` are a language model's estimate from the",
     "  description, except where `source` is `manual`. They are rough per item and",
     "  only useful in aggregate.",
@@ -300,7 +309,7 @@ function preamble(cfg: Config, today: DayKey, generatedAt: string): string {
 function now(cfg: Config, days: Map<DayKey, Day>, today: DayKey, hyper: JointHyper): string {
   const est = estimate(cfg, days, today, hyper);
   const list = sessionsOf(days);
-  const s = strengthOf(list, today, cfg.strength.windowDays);
+  const s = strengthOf(list, today, cfg.strength.windowDays, cfg.strength.rampHalfLife);
   const w = weekSummary(days, today, est?.proteinTarget ?? null);
   const lines: string[] = [`## Where things stand on ${today}`, ""];
 
@@ -562,7 +571,7 @@ export function buildContext(cfg: Config, days: Map<DayKey, Day>, o: ContextOpti
   const hyper = fitHyperFor(cfg, days, today);
   const list = sessionsOf(days);
   const points = e1rmPoints(list);
-  const index = strengthIndex(points);
+  const index = strengthIndex(points, cfg.strength.rampHalfLife);
 
   return [
     preamble(cfg, today, generatedAt),

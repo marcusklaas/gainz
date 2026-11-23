@@ -606,7 +606,7 @@ export function drawCalories(el: HTMLElement, points: CaloriePoint[], windowDays
 // ------------------------------------------------------ single-exercise e1RM
 //
 // When the picker narrows to one movement, the pooled index has nothing left
-// to pool — so the chart shows the thing itself: best-set Epley e1RM in kg,
+// to pool — so the chart shows the thing itself: best-set Wathen e1RM in kg,
 // one dot per training day, joined. The headline below does not change
 // shape — panelFit on one series is plain OLS, so the verdict stays the
 // verdict.

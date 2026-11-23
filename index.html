@@ -252,6 +252,7 @@
         <label data-tip="Uncertainty on hand-entered food, as a percent of its kcal. Model estimates carry their own; this covers the rest.">Manual food sd (%) <input id="e-manual-sd" type="number" min="0" required></label>
         <label data-tip="How far a day with no complete log can sit from its recent intake average. High on purpose: nothing was recorded.">Unlogged day sd (kcal) <input id="e-unlogged-sd" type="number" min="0" step="50" required></label>
         <label data-tip="How far back the strength verdict is fitted. Longer pins the number down harder and is slower to notice a change; six weeks resolves about 0.85% a week.">Strength window days <input id="s-window" type="number" min="7" required></label>
+        <label data-tip="Sessions after baseline before a new exercise reaches half weight in the strength index, dampening early motor-learning jumps. 0 turns ramp-up off.">Strength ramp half-life <input id="s-ramp-half-life" type="number" step="0.5" min="0" required></label>
       </details>
 
       <details>

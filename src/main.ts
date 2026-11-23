@@ -614,7 +614,7 @@ function refreshStrength(): void {
   if (!cfg) return;
   latestFiltered = selectExercises(latestSessions, strengthKeys);
   latestSingle = singleKey(latestFiltered);
-  latestStrength = strengthOf(latestFiltered, day, cfg.strength.windowDays);
+  latestStrength = strengthOf(latestFiltered, day, cfg.strength.windowDays, cfg.strength.rampHalfLife);
   renderStrength(latestStrength, latestFiltered.length === 0 && latestSessions.length > 0);
   if (!$("trend").hidden) void paintChart();
 }

@@ -44,10 +44,10 @@ export const FIELDS: readonly Field[] = [
   ["e-bias-max", "estimator.biasMaxKcal", 900],
 
   // Six weeks: long enough for the interval to be useful, short enough to be
-  // about now. Everything else the strength index could have had a knob for —
-  // break threshold, staleness, basket rule, smoothing — was removed by the
-  // design rather than defaulted.
+  // about now. Ramp half-life eases new exercises into the chained index so
+  // early motor-learning jumps do not inflate it.
   ["s-window", "strength.windowDays", 42],
+  ["s-ramp-half-life", "strength.rampHalfLife", 3.5],
 
   ["e-provider", "llm.provider", "anthropic"],
   ["e-model", "llm.model", "claude-sonnet-5"],
