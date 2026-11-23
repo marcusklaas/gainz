@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 import { withDefaults } from "../src/config.js";
 import { addDays } from "../src/dates.js";
 import { buildContext, contextFrom, WINDOW } from "../src/export.js";
-import { e1rm } from "../src/lifts.js";
+import { e1rm, e1rmPoints, sessionsOf, strengthIndex } from "../src/lifts.js";
 import type { Config, Day, DayKey, FoodItem, Session } from "../src/types.js";
 
 // --------------------------------------------------------------- fixtures
@@ -327,6 +327,45 @@ describe("lifts", () => {
 
     assert.deepEqual(after, before);
   });
+
+  it("computes ramp-up counts across full history before slicing export windows", () => {
+    // Bench has been trained weekly for 182 days (well past the 90-day Sessions
+    // window). A new exercise enters right inside the 90-day window and jumps
+    // +40% on its second appearance. The weekly si values inside the last 90
+    // days must match full-history strengthIndex — confirming n is not reset at
+    // window boundaries.
+    const days = history(190);
+    for (let i = 182; i >= 0; i -= 7) {
+      days.get(on(-i))!.sessions = [session("Push", [bench(100)])];
+    }
+    days.get(on(-84))!.sessions![0]!.exercises.push({ name: "Incline press", sets: [{ weight_kg: 60, reps: 5 }] });
+    days.get(on(-77))!.sessions![0]!.exercises.push({ name: "Incline press", sets: [{ weight_kg: 84, reps: 5 }] });
+
+    const c = cfg();
+    const doc = build(days, c);
+    const fullIndex = strengthIndex(e1rmPoints(sessionsOf(days)), c.strength.rampHalfLife);
+
+    const rows = table(doc, "Weekly").map(cols);
+    const recentRows = rows.filter((r) => r[0]! >= on(-90) && r[10] !== "");
+    assert.ok(recentRows.length >= 4);
+
+    // Every weekly row inside the last 90 days reads the exact full-history si.
+    for (const r of recentRows) {
+      const weekEnd = addDays(r[0]!, 6) <= TODAY ? addDays(r[0]!, 6) : TODAY;
+      const expected = [...fullIndex].reverse().find((q) => q.day <= weekEnd)!.x;
+      assert.equal(r[10], expected.toFixed(3), `week ${r[0]}`);
+    }
+
+    // Contrast with slicing days to 90 days before indexing (which resets Bench's
+    // session count and would give a much larger jump for the newcomer).
+    const sliced = new Map([...days.entries()].filter(([k]) => k >= on(-90)));
+    const slicedRows = table(build(sliced, c), "Weekly").map(cols);
+    const finalSi = (rs: string[][]) => Number(rs.at(-1)![10]);
+    assert.ok(
+      finalSi(rows) < finalSi(slicedRows),
+      `full-history ramp (${finalSi(rows)}) dampens newcomer more than 90d-sliced (${finalSi(slicedRows)})`,
+    );
+  });
 });
 
 // ----------------------------------------------------------------- preamble
@@ -342,6 +381,18 @@ describe("preamble", () => {
     assert.ok(doc.includes("-400 kcal (a deficit)"));
     assert.ok(doc.includes("±150"));
     assert.ok(doc.includes("1.8 g per kg"));
+  });
+
+  it("documents the active strength ramp-up half-life when enabled", () => {
+    const c = cfg();
+    c.strength.rampHalfLife = 4.5;
+    const doc = build(history(30), c);
+    assert.ok(doc.includes("1 - 2^(-(n - 1) / h)"));
+    assert.ok(doc.includes("h = 4.5"));
+
+    c.strength.rampHalfLife = 0;
+    const off = build(history(30), c);
+    assert.ok(!off.includes("1 - 2^(-(n - 1) / h)"));
   });
 
   it("says where things stand today", () => {

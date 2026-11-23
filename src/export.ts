@@ -289,6 +289,14 @@ function preamble(cfg: Config, today: DayKey, generatedAt: string): string {
     "  proportional change, so +0.10 is about +10.5%. The level is arbitrary and",
     "  the first point is zero by construction. A new exercise can join the index",
     "  but cannot move it, so adding movements never inflates progress.",
+    ...(cfg.strength.rampHalfLife > 0
+      ? [
+          "  Exercise log-deltas are pooled with exponential ramp-up weights",
+          `  \`1 - 2^(-(n - 1) / h)\` with ramp half-life \`h = ${cfg.strength.rampHalfLife}\` sessions`,
+          "  (`n` is the exercise's 1-indexed appearance count across full history),",
+          "  dampening early motor-learning jumps.",
+        ]
+      : []),
     "- Food `kcal` and `protein_g` are a language model's estimate from the",
     "  description, except where `source` is `manual`. They are rough per item and",
     "  only useful in aggregate.",
@@ -301,7 +309,7 @@ function preamble(cfg: Config, today: DayKey, generatedAt: string): string {
 function now(cfg: Config, days: Map<DayKey, Day>, today: DayKey, hyper: JointHyper): string {
   const est = estimate(cfg, days, today, hyper);
   const list = sessionsOf(days);
-  const s = strengthOf(list, today, cfg.strength.windowDays);
+  const s = strengthOf(list, today, cfg.strength.windowDays, cfg.strength.rampHalfLife);
   const w = weekSummary(days, today, est?.proteinTarget ?? null);
   const lines: string[] = [`## Where things stand on ${today}`, ""];
 
@@ -563,7 +571,7 @@ export function buildContext(cfg: Config, days: Map<DayKey, Day>, o: ContextOpti
   const hyper = fitHyperFor(cfg, days, today);
   const list = sessionsOf(days);
   const points = e1rmPoints(list);
-  const index = strengthIndex(points);
+  const index = strengthIndex(points, cfg.strength.rampHalfLife);
 
   return [
     preamble(cfg, today, generatedAt),

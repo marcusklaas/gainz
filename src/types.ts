@@ -220,6 +220,8 @@ export interface Config {
   strength: {
     /** How far back the strength verdict and its decomposition are fitted. */
     windowDays: number;
+    /** Transitions after baseline before a new exercise reaches 50% weight in `si`. <= 0 disables ramp-up. */
+    rampHalfLife: number;
   };
   llm: { provider: Provider; model: string };
   notifications: Notifications;
