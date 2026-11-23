@@ -8,6 +8,7 @@ import { addDays } from "../src/dates.js";
 import {
   confirmedSets,
   draftOf,
+  e1rm,
   e1rmPoints,
   elapsedSec,
   exerciseKey,
@@ -32,7 +33,7 @@ import {
   type DatedSession,
   type LiftPoint,
 } from "../src/lifts.js";
-import { EPLEY_REPS, type Day, type DayKey, type Draft, type DraftExercise, type Session } from "../src/types.js";
+import { WATHEN, type Day, type DayKey, type Draft, type DraftExercise, type Session } from "../src/types.js";
 
 // --------------------------------------------------------------- fixtures
 
@@ -61,7 +62,8 @@ const session = (
 
 const dated = (day: DayKey, s: Session): DatedSession => ({ day, session: s });
 
-const epley = (weight: number, reps: number) => weight * (1 + reps / EPLEY_REPS);
+const wathen = (weight: number, reps: number) =>
+  (100 * weight) / (WATHEN.base + WATHEN.scale * Math.exp(-WATHEN.decay * reps));
 
 /** A lift point straight from a level, skipping the session plumbing. */
 const point = (day: DayKey, key: string, e1rm: number): LiftPoint => ({
@@ -421,22 +423,36 @@ describe("propagateWeight", () => {
 
 // ------------------------------------------------------------- e1RM
 
+describe("e1rm", () => {
+  it("computes the Wathen (1994) formula", () => {
+    close(e1rm(100, 5), 10000 / (48.8 + 53.8 * Math.exp(-0.375)), 1e-9);
+    close(e1rm(100, 10), 10000 / (48.8 + 53.8 * Math.exp(-0.75)), 1e-9);
+  });
+
+  it("scales proportionally with weight and flattens at high reps", () => {
+    close(e1rm(200, 8), 2 * e1rm(100, 8), 1e-9);
+    assert.ok(e1rm(100, 12) > e1rm(100, 8));
+    // Asymptotes to 100 / 48.8 × weight instead of growing linearly like Epley.
+    assert.ok(e1rm(100, 50) < (100 * 100) / 48.8);
+  });
+});
+
 describe("e1rmPoints", () => {
-  it("uses the Epley e1RM of the best set, not the last or the average", () => {
+  it("uses the Wathen e1RM of the best set, not the last or the average", () => {
     const list = [dated(on(0), session({ bench: [[60, 10], [100, 5], [80, 5]] }))];
     const [p] = e1rmPoints(list);
-    close(Math.exp(p!.x), epley(100, 5), 1e-9);
+    close(Math.exp(p!.x), wathen(100, 5), 1e-9);
   });
 
   it("compares sets by e1RM rather than by weight", () => {
-    // 90×8 is a better set than 100×3: 114 against 110.
+    // 90×8 is a better set than 100×3: ~115 against ~109.
     const list = [dated(on(0), session({ bench: [[100, 3], [90, 8]] }))];
-    close(Math.exp(e1rmPoints(list)[0]!.x), epley(90, 8), 1e-9);
+    close(Math.exp(e1rmPoints(list)[0]!.x), wathen(90, 8), 1e-9);
   });
 
   it("ignores sets with no load and sets with no reps", () => {
     const list = [dated(on(0), session({ dips: [[0, 12], [20, 6]] }))];
-    close(Math.exp(e1rmPoints(list)[0]!.x), epley(20, 6), 1e-9);
+    close(Math.exp(e1rmPoints(list)[0]!.x), wathen(20, 6), 1e-9);
 
     const noReps = [dated(on(0), session({ bench: [[100, 0]] }))];
     assert.deepEqual(e1rmPoints(noReps), []);
@@ -454,7 +470,7 @@ describe("e1rmPoints", () => {
     ];
     const points = e1rmPoints(list);
     assert.equal(points.length, 1);
-    close(Math.exp(points[0]!.x), epley(110, 5), 1e-9);
+    close(Math.exp(points[0]!.x), wathen(110, 5), 1e-9);
   });
 
   it("keeps that rule when the better session came first", () => {
@@ -462,7 +478,7 @@ describe("e1rmPoints", () => {
       dated(on(0), session({ bench: [[110, 5]] }, { at: "2026-01-01T08:00:00.000Z" })),
       dated(on(0), session({ bench: [[100, 5]] }, { at: "2026-01-01T18:00:00.000Z" })),
     ];
-    close(Math.exp(e1rmPoints(list)[0]!.x), epley(110, 5), 1e-9);
+    close(Math.exp(e1rmPoints(list)[0]!.x), wathen(110, 5), 1e-9);
   });
 
   it("folds spellings onto one key while keeping a name for display", () => {

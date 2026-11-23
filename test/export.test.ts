@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import { withDefaults } from "../src/config.js";
 import { addDays } from "../src/dates.js";
 import { buildContext, contextFrom, WINDOW } from "../src/export.js";
+import { e1rm } from "../src/lifts.js";
 import type { Config, Day, DayKey, FoodItem, Session } from "../src/types.js";
 
 // --------------------------------------------------------------- fixtures
@@ -285,7 +286,7 @@ describe("lifts", () => {
 
     const rows = table(doc, "Sessions").map(cols);
     assert.equal(rows[0]![3], "70x5 80x5");
-    assert.equal(rows[0]![4], (80 * (1 + 5 / 30)).toFixed(1));
+    assert.equal(rows[0]![4], e1rm(80, 5).toFixed(1));
 
     const ex = table(doc, "Per exercise").map(cols);
     assert.equal(ex.length, 1, "two spellings, one exercise");

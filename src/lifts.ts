@@ -3,7 +3,7 @@
 // takes: no storage, no DOM, nothing derived persisted.
 import { addDays, atKey, daysBetween } from "./dates.js";
 import {
-  EPLEY_REPS,
+  WATHEN,
   type Day,
   type DayKey,
   type Draft,
@@ -308,6 +308,10 @@ export function summarise(s: Session): string {
 // in, a trend and an honest error bar out. See STRENGTH.md for what was
 // measured, what was rejected, and what is still unverified.
 
+/** Wathen e1RM for one performed set: `100 × weight / (48.8 + 53.8 × e^(-0.075 × reps))`. */
+export const e1rm = (weightKg: number, reps: number): number =>
+  (100 * weightKg) / (WATHEN.base + WATHEN.scale * Math.exp(-WATHEN.decay * reps));
+
 /** One exercise on one day: the atom everything below is built from. */
 export interface LiftPoint {
   day: DayKey;
@@ -315,7 +319,7 @@ export interface LiftPoint {
   key: string;
   /** The spelling used that day, for display. */
   name: string;
-  /** log of the best set's Epley e1RM. */
+  /** log of the best set's Wathen e1RM. */
   x: number;
 }
 
@@ -346,7 +350,7 @@ export function e1rmPoints(list: DatedSession[]): LiftPoint[] {
       const top = Math.max(
         0,
         ...ex.sets.filter((s) => s.weight_kg > 0 && s.reps > 0)
-          .map((s) => s.weight_kg * (1 + s.reps / EPLEY_REPS)),
+          .map((s) => e1rm(s.weight_kg, s.reps)),
       );
       if (!top) continue;
 
