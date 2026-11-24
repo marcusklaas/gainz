@@ -1,4 +1,4 @@
-// Trend chart, built on uPlot (MIT, no transitive dependencies, vendored into
+// Trend charts, built on uPlot (MIT, no transitive dependencies, vendored into
 // vendor/ so the deployed site needs neither node_modules nor a CDN).
 //
 // PLAN.md's "no dependencies" rule is deliberately broken here: axes, tick
@@ -7,7 +7,7 @@
 // data. It is the only runtime dependency in the project.
 import uPlot from "../vendor/uPlot.esm.js";
 import { parseDay } from "./dates.js";
-import { projection, type CaloriePoint, type HoltPoint, type Sample } from "./estimate.js";
+import { projection, type CaloriePoint, type Sample, type TrendPoint } from "./estimate.js";
 import type { IndexPoint, LiftPoint } from "./lifts.js";
 
 const DAY_SECONDS = 86_400;
@@ -44,45 +44,15 @@ export interface Span {
   projectionDays: number;
 }
 
-let plot: uPlot | null = null;
-/** Full extent including the projection, so pan/zoom can be clamped to it. */
-let bounds: Extent = { min: 0, max: 0 };
-/** Seconds of `bounds` that are projected rather than measured. */
-let projected = 0;
-/** Seconds of history the default view opens on. */
-let history = FALLBACK_SPAN_DAYS * DAY_SECONDS;
-
-/**
- * The window the chart opens at and returns to on double-click: everything that
- * fed the current TDEE estimate, plus where it says the next week goes.
- *
- * History is counted back from the last real weigh-in rather than from the right
- * edge, with the projection added on top — otherwise turning the projection on
- * would silently eat a week of history out of the view.
- *
- * That anchor is the last weigh-in, while the intake window it is sized from
- * counts back from today. The two coincide on any day that has been weighed,
- * which is nearly all of them; after a few days off the scale the view drifts
- * older than the window by however long the gap is. Not worth correcting, since
- * the alternative — anchoring on today — would leave dead space on the right of
- * a chart whose whole right-hand side is the point.
- *
- * Everything outside is still there. Zoom or pan out to reach it.
- */
-function defaultView(): Extent {
-  return {
-    min: Math.max(bounds.max - projected - history, bounds.min),
-    max: bounds.max,
-  };
-}
+// ----------------------------------------------------------------- shared slot
 
 /**
  * Wheel and pinch to zoom, drag to pan, double-click to reset. Replaces uPlot's
  * built-in drag-to-zoom, since drag is far more useful as scroll on a phone.
  *
- * Both charts on Trend use it, so what it may reach and where it returns to are
- * read through callbacks rather than closed over: the extents belong to whichever
- * chart installed the plugin, and they change on every redraw.
+ * Every chart on Trend uses it, so what it may reach and where it returns to
+ * are read through callbacks rather than closed over: the extents belong to
+ * whichever chart installed the plugin, and they change on every redraw.
  */
 function panZoom(limits: () => Extent, home: () => Extent): uPlot.Plugin {
   return {
@@ -185,7 +155,19 @@ function theme() {
   return { fg: v("--fg"), dim: v("--dim"), line: v("--line"), ok: v("--ok") };
 }
 
-function options(width: number): uPlot.Options {
+type Theme = ReturnType<typeof theme>;
+
+/**
+ * Shared uPlot frame for every Trend chart: axes, live readout, date series,
+ * and pan/zoom. Only the y-axis formatting and the data series differ.
+ */
+function buildOptions(
+  width: number,
+  yFormat: (v: number) => string,
+  series: (c: Theme) => uPlot.Series[],
+  limits: () => Extent,
+  home: () => Extent,
+): uPlot.Options {
   const c = theme();
   const axis = {
     stroke: c.dim,
@@ -203,7 +185,7 @@ function options(width: number): uPlot.Options {
     scales: { x: { time: true } },
     axes: [
       { ...axis },
-      { ...axis, size: 44, values: (_u, vals) => vals.map((v) => `${v.toFixed(1)}`) },
+      { ...axis, size: 44, values: (_u, vals) => vals.map(yFormat) },
     ],
     series: [
       {
@@ -220,53 +202,108 @@ function options(width: number): uPlot.Options {
                 month: "short",
               }),
       },
-      {
-        label: "weighed",
-        stroke: c.dim,
-        paths: () => null, // points only — raw weigh-ins are samples, not a line
-        points: { show: true, size: 3.5, stroke: c.dim, fill: c.dim },
-        value: (_u, v) => (v == null ? "—" : `${v.toFixed(1)} kg`),
-      },
-      {
-        label: "trend",
-        stroke: c.ok,
-        width: 2,
-        points: { show: false },
-        value: (_u, v) => (v == null ? "—" : `${v.toFixed(2)} kg`),
-      },
-      {
-        // Same colour as the trend, because it is the same line continued —
-        // dashed is the whole distinction, and a second colour would read as a
-        // second quantity. Thinner too: a forecast should not draw the eye
-        // harder than the measurement it is drawn from.
-        label: "projected",
-        // Drawn, but kept out of the readout — for the same reason it is not
-        // given its own colour. A fourth label-and-value pair crowds the row off
-        // a phone, and it would be a fourth pair reporting no fourth quantity.
-        // The readout stays the three it was before the projection existed, and
-        // the dashes speak for themselves. See .u-legend tr.unlisted in
-        // style.css, which is what the class is for.
-        class: "unlisted",
-        stroke: c.ok,
-        width: 1.5,
-        dash: [3, 4],
-        points: { show: false },
-        value: (_u, v) => (v == null ? "—" : `${v.toFixed(2)} kg`),
-      },
+      ...series(c),
     ],
-    plugins: [panZoom(() => bounds, defaultView)],
+    plugins: [panZoom(limits, home)],
   };
 }
 
 /**
- * Draws or updates the chart. Must be called while the container is visible —
- * uPlot sizes from the element, and a hidden section measures zero.
+ * One mounted uPlot instance plus its bounds and ResizeObserver. Teardown
+ * disconnects the observer as well as destroying the plot, so mode switches on
+ * a shared container (index <-> e1RM) never leak observers.
  */
-export function drawTrend(el: HTMLElement, samples: Sample[], trend: HoltPoint[], span: Span): void {
-  if (samples.length < 2) {
-    plot?.destroy();
-    plot = null;
+class ChartSlot {
+  private plot: uPlot | null = null;
+  private observer: ResizeObserver | null = null;
+  bounds: Extent = { min: 0, max: 0 };
+
+  destroy(el?: HTMLElement): void {
+    this.observer?.disconnect();
+    this.observer = null;
+    this.plot?.destroy();
+    this.plot = null;
+    el?.replaceChildren();
+  }
+
+  /**
+   * Draws or updates the chart. Must be called while the container is visible
+   * — uPlot sizes from the element, and a hidden section measures zero.
+   */
+  draw(
+    el: HTMLElement,
+    data: uPlot.AlignedData,
+    home: () => Extent,
+    yFormat: (v: number) => string,
+    series: (c: Theme) => uPlot.Series[],
+  ): void {
+    const xs = data[0];
+    this.bounds = { min: xs[0]!, max: xs[xs.length - 1]! };
+
+    const width = el.clientWidth;
+    if (!width) return; // container still hidden; caller redraws on show
+
+    if (this.plot) {
+      // setData re-ranges x to the full extent, so the view has to be reapplied.
+      this.plot.setData(data);
+      this.plot.setSize({ width, height: HEIGHT });
+      this.plot.setScale("x", home());
+      return;
+    }
+
     el.replaceChildren();
+    this.plot = new uPlot(
+      buildOptions(width, yFormat, series, () => this.bounds, home),
+      data,
+      el,
+    );
+    this.plot.setScale("x", home());
+
+    // Width only — the height is fixed. Still needed for a window dragged wider,
+    // a phone turned sideways, or the sidebar appearing at 48rem, each of which
+    // changes how much span fits without uPlot hearing about it.
+    this.observer = new ResizeObserver(() => {
+      const w = el.clientWidth;
+      if (this.plot && w) this.plot.setSize({ width: w, height: HEIGHT });
+    });
+    this.observer.observe(el);
+  }
+}
+
+/** Trailing window clamped to the chart's full extent. */
+const trailingView = (slot: ChartSlot, windowSec: () => number): Extent => ({
+  min: Math.max(slot.bounds.max - windowSec(), slot.bounds.min),
+  max: slot.bounds.max,
+});
+
+// ------------------------------------------------------------------ weight
+
+const weightChart = new ChartSlot();
+/** Seconds of `weightChart.bounds` that are projected rather than measured. */
+let projected = 0;
+/** Seconds of history the default view opens on. */
+let history = FALLBACK_SPAN_DAYS * DAY_SECONDS;
+
+/**
+ * The window the chart opens at and returns to on double-click: history back
+ * from the last real weigh-in, plus where the tangent says the next week goes.
+ *
+ * History is counted back from the last real weigh-in rather than from the right
+ * edge, with the projection added on top — otherwise turning the projection on
+ * would silently eat a week of history out of the view.
+ *
+ * Everything outside is still there. Zoom or pan out to reach it.
+ */
+function weightDefaultView(): Extent {
+  return {
+    min: Math.max(weightChart.bounds.max - projected - history, weightChart.bounds.min),
+    max: weightChart.bounds.max,
+  };
+}
+
+export function drawTrend(el: HTMLElement, samples: Sample[], trend: TrendPoint[], span: Span): void {
+  if (samples.length < 2) {
+    weightChart.destroy(el);
     return;
   }
 
@@ -294,141 +331,74 @@ export function drawTrend(el: HTMLElement, samples: Sample[], trend: HoltPoint[]
 
   projected = future.length * DAY_SECONDS;
   history = Math.max(span.historyDays, 1) * DAY_SECONDS;
-  bounds = { min: xs[0]!, max: xs[xs.length - 1]! };
 
-  const width = el.clientWidth;
-  if (!width) return; // container still hidden; caller redraws on show
-
-  if (plot) {
-    // setData re-ranges x to the full extent, so the view has to be reapplied.
-    plot.setData(data);
-    plot.setSize({ width, height: HEIGHT });
-    plot.setScale("x", defaultView());
-    return;
-  }
-
-  el.replaceChildren();
-  plot = new uPlot(options(width), data, el);
-  plot.setScale("x", defaultView());
-
-  // Width only — the height is fixed. Still needed for a window dragged wider,
-  // a phone turned sideways, or the sidebar appearing at 48rem, each of which
-  // changes how much span fits without uPlot hearing about it.
-  new ResizeObserver(() => {
-    const w = el.clientWidth;
-    if (plot && w) plot.setSize({ width: w, height: HEIGHT });
-  }).observe(el);
+  weightChart.draw(
+    el,
+    data,
+    weightDefaultView,
+    (v) => v.toFixed(1),
+    (c) => [
+      {
+        label: "weighed",
+        stroke: c.dim,
+        paths: () => null, // points only — raw weigh-ins are samples, not a line
+        points: { show: true, size: 3.5, stroke: c.dim, fill: c.dim },
+        value: (_u, v) => (v == null ? "—" : `${v.toFixed(1)} kg`),
+      },
+      {
+        label: "trend",
+        stroke: c.ok,
+        width: 2,
+        points: { show: false },
+        value: (_u, v) => (v == null ? "—" : `${v.toFixed(2)} kg`),
+      },
+      {
+        // Same colour as the trend, because it is the same line continued —
+        // dashed is the whole distinction, and a second colour would read as a
+        // second quantity. Kept out of the readout via `.u-legend tr.unlisted`.
+        label: "projected",
+        class: "unlisted",
+        stroke: c.ok,
+        width: 1.5,
+        dash: [3, 4],
+        points: { show: false },
+        value: (_u, v) => (v == null ? "—" : `${v.toFixed(2)} kg`),
+      },
+    ],
+  );
 }
 
-// ------------------------------------------------------------ the strength index
+// ------------------------------------------------ strength index & single e1RM
 //
 // Its own chart, below the weight one and not merged with it: the two share an
 // x axis and nothing else, and a second y axis on one picture would invite
 // exactly the point-to-point reading both are built to avoid.
+//
+// The index and single-exercise e1RM share the #strength-chart container, so
+// entering one tears down the other — otherwise a mode switch would stack
+// canvases or leave a stale ResizeObserver attached.
 
-let strengthPlot: uPlot | null = null;
-/** Full data extent, so pan/zoom can be clamped to it. */
-let strengthBounds: Extent = { min: 0, max: 0 };
-/** Seconds of history the default view opens on, set on every draw — always
- *  before the plot that reads it through the plugin exists. */
+const strengthChart = new ChartSlot();
+const e1rmChart = new ChartSlot();
+let strengthMode: "index" | "e1rm" | null = null;
 let strengthWindow = 0;
-
-/**
- * The window the fit is computed over, back from the last session — so the
- * picture opens on the same stretch the verdict below it is about. Everything
- * older is still there; pan or zoom out to reach it.
- */
-function strengthDefaultView(): Extent {
-  return {
-    min: Math.max(strengthBounds.max - strengthWindow, strengthBounds.min),
-    max: strengthBounds.max,
-  };
-}
-
-/** Shared with the weight chart above; only the series differ. */
-function strengthOptions(width: number): uPlot.Options {
-  const c = theme();
-  const axis = {
-    stroke: c.dim,
-    grid: { stroke: c.line, width: 1 },
-    ticks: { stroke: c.line, width: 1 },
-    font: "11px system-ui, sans-serif",
-  };
-
-  return {
-    width,
-    height: HEIGHT,
-    padding: [8, 8, 0, 0],
-    cursor: { drag: { x: false, y: false }, points: { size: 7 } },
-    legend: { show: true, live: true, markers: { show: false } },
-    scales: { x: { time: true } },
-    axes: [
-      { ...axis },
-      { ...axis, size: 44, values: (_u, vals) => vals.map((v) => v.toFixed(0)) },
-    ],
-    series: [
-      {
-        label: "date",
-        value: (_u, v) =>
-          v == null
-            ? "—"
-            : new Date(v * 1000).toLocaleDateString(undefined, {
-                weekday: "short",
-                day: "numeric",
-                month: "short",
-              }),
-      },
-      {
-        // A line, unlike the weigh-ins above: consecutive index points are not
-        // independent samples of one quantity, they are a running total, and
-        // the segment between two of them is a real thing that happened.
-        label: "index",
-        stroke: c.fg,
-        width: 2,
-        points: { show: true, size: 3.5, stroke: c.fg, fill: c.fg },
-        value: (_u, v) => (v == null ? "—" : v.toFixed(1)),
-      },
-    ],
-    plugins: [panZoom(() => strengthBounds, strengthDefaultView)],
-  };
-}
+let e1rmWindow = 0;
 
 /**
  * The index, rebased so the first session on record reads 100, opening on the
  * window the fit below it is computed over.
  *
- * Pans and zooms like the weight chart, which it did not used to: the objection
- * was that the index has no absolute level — it is defined only up to an
- * additive constant — so a baseline that meant "the left edge of the picture"
- * would slide out from under the reader on the first drag. The fix is to stop
- * the baseline moving rather than to stop the reader: it is pinned to the start
- * of the loaded history, so every number on the axis means the same thing at
- * every pan and zoom, and the default view no longer has to be the whole extent
- * to keep it honest. What the axis costs is that its left edge rarely reads 100
- * any more, which was never the point of the picture.
- *
- * The index alone, with no fitted line over it. The line was drawn once and
- * looked at: over six weeks the fit reads +44% where the index's own endpoints
- * read +58%, because the fit uses every session in the window and the index
- * only chains. That gap is honest and is not small, and eleven points of
- * daylight between a line and the points it is drawn through reads as a bug
- * rather than as information. The headline carries the fit in words instead.
+ * The index alone, with no fitted line over it: the fit uses every session in
+ * the window while the index chains, so the gap between them is honest and the
+ * headline carries the fit in words instead.
  */
-/** Which picture the strength slot is showing: the pooled index, or one
- *  movement's e1RM. The two draw functions share the container, so entering
- *  one tears down the other — otherwise a mode switch would stack canvases. */
-let strengthMode: "index" | "e1rm" | null = null;
-
 export function drawStrength(el: HTMLElement, index: IndexPoint[], windowDays: number): void {
   if (strengthMode !== "index") {
-    e1rmPlot?.destroy();
-    e1rmPlot = null;
+    e1rmChart.destroy();
     strengthMode = "index";
   }
   if (index.length < 2) {
-    strengthPlot?.destroy();
-    strengthPlot = null;
-    el.replaceChildren();
+    strengthChart.destroy(el);
     return;
   }
 
@@ -437,246 +407,25 @@ export function drawStrength(el: HTMLElement, index: IndexPoint[], windowDays: n
     index.map(toX),
     index.map((p) => 100 * Math.exp(p.x - base)),
   ];
-
-  const xs = data[0];
-  strengthBounds = { min: xs[0]!, max: xs[xs.length - 1]! };
   strengthWindow = Math.max(windowDays, 1) * DAY_SECONDS;
 
-  const width = el.clientWidth;
-  if (!width) return; // container still hidden; caller redraws on show
-
-  if (strengthPlot) {
-    // setData re-ranges x to the full extent, so the view has to be reapplied.
-    strengthPlot.setData(data);
-    strengthPlot.setSize({ width, height: HEIGHT });
-    strengthPlot.setScale("x", strengthDefaultView());
-    return;
-  }
-
-  el.replaceChildren();
-  strengthPlot = new uPlot(strengthOptions(width), data, el);
-  strengthPlot.setScale("x", strengthDefaultView());
-
-  new ResizeObserver(() => {
-    const w = el.clientWidth;
-    if (strengthPlot && w) strengthPlot.setSize({ width: w, height: HEIGHT });
-  }).observe(el);
-}
-
-// ------------------------------------------------------------ intake vs TDEE
-//
-// Its own chart below the strength one and not merged with either: it shares
-// their x axis and nothing else. One y axis is enough — intake and TDEE are
-// both kcal, which is what makes this mergeable where weight-vs-strength was
-// not.
-//
-// Intake is points only, like the weigh-ins above — but in the foreground
-// colour, not dimmed. A weigh-in is a noisy sample of a truth that cannot be
-// measured directly (same gut, same hydration); an intake is the thing
-// itself, measured with error. Either way there is no line between two
-// readings, because nothing was measured in between — and a missing day is a
-// missing dot rather than a zero, the same "empty means not recorded" rule
-// the export prints in words.
-
-let caloriePlot: uPlot | null = null;
-/** Full data extent, so pan/zoom can be clamped to it. */
-let calorieBounds: Extent = { min: 0, max: 0 };
-/** Seconds of history the default view opens on, set on every draw — always
- *  before the plot that reads it through the plugin exists. */
-let calorieWindow = 0;
-
-/**
- * The window the series was built over — the same strength window, so the two
- * pictures tell the same stretch of time. Everything older is still there; pan
- * or zoom out to reach it.
- */
-function calorieDefaultView(): Extent {
-  return {
-    min: Math.max(calorieBounds.max - calorieWindow, calorieBounds.min),
-    max: calorieBounds.max,
-  };
-}
-
-/** Shared with the charts above; only the series differ. */
-function calorieOptions(width: number): uPlot.Options {
-  const c = theme();
-  const axis = {
-    stroke: c.dim,
-    grid: { stroke: c.line, width: 1 },
-    ticks: { stroke: c.line, width: 1 },
-    font: "11px system-ui, sans-serif",
-  };
-
-  return {
-    width,
-    height: HEIGHT,
-    padding: [8, 8, 0, 0],
-    cursor: { drag: { x: false, y: false }, points: { size: 7 } },
-    legend: { show: true, live: true, markers: { show: false } },
-    scales: { x: { time: true } },
-    axes: [
-      { ...axis },
-      { ...axis, size: 44, values: (_u, vals) => vals.map((v) => v.toFixed(0)) },
-    ],
-    series: [
+  strengthChart.draw(
+    el,
+    data,
+    () => trailingView(strengthChart, () => strengthWindow),
+    (v) => v.toFixed(0),
+    (c) => [
       {
-        label: "date",
-        value: (_u, v) =>
-          v == null
-            ? "—"
-            : new Date(v * 1000).toLocaleDateString(undefined, {
-                weekday: "short",
-                day: "numeric",
-                month: "short",
-              }),
-      },
-      {
-        // What was actually eaten: points only — a counted day is a reading,
-        // and the days between readings hold nothing to join up. Foreground,
-        // not dimmed like the weigh-ins: those sample a truth the scale
-        // cannot see, while this is the thing itself.
-        label: "intake",
-        stroke: c.fg,
-        paths: () => null, // points only — counted days are samples, not a line
-        points: { show: true, size: 3.5, stroke: c.fg, fill: c.fg },
-        value: (_u, v) => (v == null ? "—" : `${v.toFixed(0)} kcal`),
-      },
-      {
-        // The estimate: the same colour as the weight trend, because it is
-        // the same kind of thing — a smoothed reading, not a measurement.
-        label: "tdee",
-        stroke: c.ok,
-        width: 2,
-        points: { show: false },
-        value: (_u, v) => (v == null ? "—" : `${v.toFixed(0)} kcal`),
-      },
-    ],
-    plugins: [panZoom(() => calorieBounds, calorieDefaultView)],
-  };
-}
-
-/**
- * Daily intake against the TDEE trajectory, opening on the window the series
- * was built over.
- *
- * No fitted line over either series. Intake is already daily truth and needs
- * no fit; the TDEE line *is* the smoothed reading, and a second smoothing of
- * it would be a claim about method this chart is not making.
- */
-export function drawCalories(el: HTMLElement, points: CaloriePoint[], windowDays: number): void {
-  const usable = points.filter((p) => p.kcal !== null || p.tdee !== null);
-  if (usable.length < 2) {
-    caloriePlot?.destroy();
-    caloriePlot = null;
-    el.replaceChildren();
-    return;
-  }
-
-  const data: uPlot.AlignedData = [
-    usable.map(toX),
-    usable.map((p) => p.kcal),
-    usable.map((p) => p.tdee),
-  ];
-
-  const xs = data[0];
-  calorieBounds = { min: xs[0]!, max: xs[xs.length - 1]! };
-  calorieWindow = Math.max(windowDays, 1) * DAY_SECONDS;
-
-  const width = el.clientWidth;
-  if (!width) return; // container still hidden; caller redraws on show
-
-  if (caloriePlot) {
-    // setData re-ranges x to the full extent, so the view has to be reapplied.
-    caloriePlot.setData(data);
-    caloriePlot.setSize({ width, height: HEIGHT });
-    caloriePlot.setScale("x", calorieDefaultView());
-    return;
-  }
-
-  el.replaceChildren();
-  caloriePlot = new uPlot(calorieOptions(width), data, el);
-  caloriePlot.setScale("x", calorieDefaultView());
-
-  new ResizeObserver(() => {
-    const w = el.clientWidth;
-    if (caloriePlot && w) caloriePlot.setSize({ width: w, height: HEIGHT });
-  }).observe(el);
-}
-
-// ------------------------------------------------------ single-exercise e1RM
-//
-// When the picker narrows to one movement, the pooled index has nothing left
-// to pool — so the chart shows the thing itself: best-set Wathen e1RM in kg,
-// one dot per training day, joined. The headline below does not change
-// shape — panelFit on one series is plain OLS, so the verdict stays the
-// verdict.
-
-let e1rmPlot: uPlot | null = null;
-/** Full data extent, so pan/zoom can be clamped to it. */
-let e1rmBounds: Extent = { min: 0, max: 0 };
-/** Seconds of history the default view opens on, set on every draw — always
- *  before the plot that reads it through the plugin exists. */
-let e1rmWindow = 0;
-
-/**
- * The window the basket was built over, so one exercise tells the same
- * stretch of time the index would have. Everything older is still there; pan
- * or zoom out to reach it.
- */
-function e1rmDefaultView(): Extent {
-  return {
-    min: Math.max(e1rmBounds.max - e1rmWindow, e1rmBounds.min),
-    max: e1rmBounds.max,
-  };
-}
-
-/** Shared with the charts above; only the series differ. */
-function e1rmOptions(width: number): uPlot.Options {
-  const c = theme();
-  const axis = {
-    stroke: c.dim,
-    grid: { stroke: c.line, width: 1 },
-    ticks: { stroke: c.line, width: 1 },
-    font: "11px system-ui, sans-serif",
-  };
-
-  return {
-    width,
-    height: HEIGHT,
-    padding: [8, 8, 0, 0],
-    cursor: { drag: { x: false, y: false }, points: { size: 7 } },
-    legend: { show: true, live: true, markers: { show: false } },
-    scales: { x: { time: true } },
-    axes: [
-      { ...axis },
-      { ...axis, size: 44, values: (_u, vals) => vals.map((v) => v.toFixed(1)) },
-    ],
-    series: [
-      {
-        label: "date",
-        value: (_u, v) =>
-          v == null
-            ? "—"
-            : new Date(v * 1000).toLocaleDateString(undefined, {
-                weekday: "short",
-                day: "numeric",
-                month: "short",
-              }),
-      },
-      {
-        // The estimated max itself, in the foreground: this is the thing,
-        // measured with error, where the index was a pooled reading. Dots
-        // joined, like the index above it — one movement's progression is a
-        // line worth following session to session.
-        label: "e1rm",
+        // A line, unlike the weigh-ins above: consecutive index points are a
+        // running total, and the segment between two of them is a real thing.
+        label: "index",
         stroke: c.fg,
         width: 2,
         points: { show: true, size: 3.5, stroke: c.fg, fill: c.fg },
-        value: (_u, v) => (v == null ? "—" : `${v.toFixed(1)} kg`),
+        value: (_u, v) => (v == null ? "—" : v.toFixed(1)),
       },
     ],
-    plugins: [panZoom(() => e1rmBounds, e1rmDefaultView)],
-  };
+  );
 }
 
 /**
@@ -686,40 +435,78 @@ function e1rmOptions(width: number): uPlot.Options {
  */
 export function drawE1rm(el: HTMLElement, points: LiftPoint[], windowDays: number): void {
   if (strengthMode !== "e1rm") {
-    strengthPlot?.destroy();
-    strengthPlot = null;
+    strengthChart.destroy();
     strengthMode = "e1rm";
   }
   if (points.length < 2) {
-    e1rmPlot?.destroy();
-    e1rmPlot = null;
-    el.replaceChildren();
+    e1rmChart.destroy(el);
     return;
   }
 
   const data: uPlot.AlignedData = [points.map(toX), points.map((p) => Math.exp(p.x))];
-
-  const xs = data[0];
-  e1rmBounds = { min: xs[0]!, max: xs[xs.length - 1]! };
   e1rmWindow = Math.max(windowDays, 1) * DAY_SECONDS;
 
-  const width = el.clientWidth;
-  if (!width) return; // container still hidden; caller redraws on show
+  e1rmChart.draw(
+    el,
+    data,
+    () => trailingView(e1rmChart, () => e1rmWindow),
+    (v) => v.toFixed(1),
+    (c) => [
+      {
+        label: "e1rm",
+        stroke: c.fg,
+        width: 2,
+        points: { show: true, size: 3.5, stroke: c.fg, fill: c.fg },
+        value: (_u, v) => (v == null ? "—" : `${v.toFixed(1)} kg`),
+      },
+    ],
+  );
+}
 
-  if (e1rmPlot) {
-    // setData re-ranges x to the full extent, so the view has to be reapplied.
-    e1rmPlot.setData(data);
-    e1rmPlot.setSize({ width, height: HEIGHT });
-    e1rmPlot.setScale("x", e1rmDefaultView());
+// ------------------------------------------------------------ intake vs TDEE
+
+const calorieChart = new ChartSlot();
+let calorieWindow = 0;
+
+/**
+ * Daily intake against the TDEE trajectory, opening on the window the series
+ * was built over. Intake is points only — a missing day is a missing dot rather
+ * than a zero — and TDEE is the smoothed reading in the same colour as weight.
+ */
+export function drawCalories(el: HTMLElement, points: CaloriePoint[], windowDays: number): void {
+  const usable = points.filter((p) => p.kcal !== null || p.tdee !== null);
+  if (usable.length < 2) {
+    calorieChart.destroy(el);
     return;
   }
 
-  el.replaceChildren();
-  e1rmPlot = new uPlot(e1rmOptions(width), data, el);
-  e1rmPlot.setScale("x", e1rmDefaultView());
+  const data: uPlot.AlignedData = [
+    usable.map(toX),
+    usable.map((p) => p.kcal),
+    usable.map((p) => p.tdee),
+  ];
+  calorieWindow = Math.max(windowDays, 1) * DAY_SECONDS;
 
-  new ResizeObserver(() => {
-    const w = el.clientWidth;
-    if (e1rmPlot && w) e1rmPlot.setSize({ width: w, height: HEIGHT });
-  }).observe(el);
+  calorieChart.draw(
+    el,
+    data,
+    () => trailingView(calorieChart, () => calorieWindow),
+    (v) => v.toFixed(0),
+    (c) => [
+      {
+        label: "intake",
+        stroke: c.fg,
+        paths: () => null, // points only — counted days are samples, not a line
+        points: { show: true, size: 3.5, stroke: c.fg, fill: c.fg },
+        value: (_u, v) => (v == null ? "—" : `${v.toFixed(0)} kcal`),
+      },
+      {
+        label: "tdee",
+        stroke: c.ok,
+        width: 2,
+        points: { show: false },
+        value: (_u, v) => (v == null ? "—" : `${v.toFixed(0)} kcal`),
+      },
+    ],
+  );
 }

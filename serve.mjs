@@ -12,6 +12,7 @@ const TYPES = {
   ".map": "application/json",
   ".csv": "text/csv",
   ".png": "image/png",
+  ".svg": "image/svg+xml",
   ".webmanifest": "application/manifest+json",
 };
 

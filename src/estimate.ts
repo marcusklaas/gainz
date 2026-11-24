@@ -24,9 +24,8 @@ export interface Sample {
   kg: number;
 }
 
-/** A smoothed point: the level, and the slope the smoother was carrying when it
- *  reached it. */
-export interface HoltPoint extends Sample {
+/** A filtered trend point: tissue weight, and the implied drift beside it. */
+export interface TrendPoint extends Sample {
   /** kg/day. */
   slope: number;
 }
@@ -41,66 +40,23 @@ export function weightSamples(days: Map<DayKey, Day>): Sample[] {
 }
 
 /**
- * Holt linear-trend smoothing, time-aware. Carries a level *and* a slope, so
- * the level is corrected by the trend instead of being dragged behind it.
+ * The current slope carried forward from the last trend point, one point per
+ * day, starting at that point itself.
  *
- * A plain EWMA estimates level only, which puts its weights at a mean age of
- * (1-a)/a — about 14 days at a 10-day half-life. That is the visible lag. Holt
- * removes it without needing future data.
- *
- * Both outputs are used: the level is the smoothed weight on the chart and the
- * input to Mifflin-St Jeor, and the slope is what TDEE is derived from. They
- * come from the same recursion, so the rate shown is the tangent to the curve
- * drawn — a windowed fit alongside it could report a rate the drawn line
- * visibly disagrees with.
- */
-export function holtSeries(
-  samples: Sample[],
-  levelHalfLifeDays: number,
-  trendHalfLifeDays: number,
-): HoltPoint[] {
-  const out: HoltPoint[] = [];
-  let level = 0;
-  let slope = 0; // kg/day
-
-  for (const s of samples) {
-    const last = out[out.length - 1];
-    if (!last) {
-      level = s.kg;
-      out.push({ day: s.day, kg: level, slope });
-      continue;
-    }
-    const gap = Math.max(daysBetween(last.day, s.day), 1);
-    const a = 1 - Math.pow(0.5, gap / levelHalfLifeDays);
-    const b = 1 - Math.pow(0.5, gap / trendHalfLifeDays);
-
-    const previous = level;
-    level = a * s.kg + (1 - a) * (level + slope * gap);
-    slope = b * ((level - previous) / gap) + (1 - b) * slope;
-    out.push({ day: s.day, kg: level, slope });
-  }
-  return out;
-}
-
-/**
- * The smoother's current slope carried forward from where it left off, one
- * point per day, starting at the last trend point itself.
- *
- * This is the one place the reported rate becomes legible. The headline number
- * is an average of the trend line's own gradient over roughly the last eight
- * days, and eight days is too little width to read a gradient off at any useful
- * chart span — so the drawn curve can look like it is rising while the headline
- * says falling, with both correct. A tangent puts the two next to each other.
+ * This is the one place the reported rate becomes legible: at a multi-week
+ * chart span a short-horizon slope is too steep or too shallow to read by eye
+ * off the solid curve alone, so a tangent puts the rate next to the curve it
+ * belongs to.
  *
  * It repeats the last trend point rather than starting a day after it, so the
  * caller can draw this as its own line and have it grow out of the solid one
  * instead of floating a day to its right.
  *
- * Straight, not curved: the model's forecast genuinely is a straight line. Holt
- * holds its slope until an observation moves it, so anything else drawn here
- * would be a claim the estimator is not making.
+ * Straight, not curved: under constant intake the filter's forecast genuinely
+ * is a straight line at its current slope, so anything else drawn here would be
+ * a claim the estimator is not making.
  */
-export function projection(trend: HoltPoint[], days: number): Sample[] {
+export function projection(trend: TrendPoint[], days: number): Sample[] {
   const last = trend[trend.length - 1];
   if (last === undefined || days <= 0) return [];
   const out: Sample[] = [{ day: last.day, kg: last.kg }];
@@ -181,9 +137,9 @@ interface Counted {
 export interface Estimate {
   samples: Sample[];
   /** Smoothed weight, one point per weigh-in. */
-  trendLine: HoltPoint[];
+  trendLine: TrendPoint[];
   trendKg: number;
-  /** The smoother's current slope, or null below the two weigh-ins it takes to
+  /** The filter's current slope, or null below the two weigh-ins it takes to
    *  have a rate at all. Null rather than zero so "flat" and "unknown" stay
    *  distinguishable, which is the one thing every caller branches on. */
   kgPerWeek: number | null;
@@ -409,7 +365,7 @@ export function estimate(
   // One trend point per weigh-in, as before: tissue is the drawn line and the
   // implied drift beside it is its tangent, so the rate shown is the gradient
   // of the curve drawn.
-  const trendLine: HoltPoint[] = [];
+  const trendLine: TrendPoint[] = [];
   for (const s of samples) {
     const i = daysBetween(inputs.start, s.day);
     const st = at(i);
