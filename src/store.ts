@@ -268,7 +268,7 @@ export function saveConfig(c: Config): void {
  * server had; without it a locally deleted item is indistinguishable from one
  * the other device just added, and one of the two behaves wrongly.
  */
-function mergeDay(base: Day | undefined, local: Day, remote: Day | undefined): Day {
+export function mergeDay(base: Day | undefined, local: Day, remote: Day | undefined): Day {
   // Remote records we have never seen are the other device's additions. Anything
   // remote that we did know about but no longer hold was deleted here.
   const union = <T extends { id: string }>(b: T[] = [], l: T[] = [], r: T[] = []): T[] => {
