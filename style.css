@@ -383,9 +383,6 @@ h3 span {
 }
 #week dt { flex: 0 0 5.5rem; color: var(--dim); font-size: .85rem; }
 #week dd { flex: 1; margin: 0; font-variant-numeric: tabular-nums; }
-.chart .pts circle { fill: var(--dim); }
-.chart .ewma { fill: none; stroke: var(--ok); stroke-width: 1.5; }
-.chart text { fill: var(--dim); font-size: 8px; }
 
 ul { list-style: none; padding: 0; margin: 1rem 0; }
 li {

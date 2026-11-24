@@ -15,8 +15,8 @@
 // date helpers — on the belief that a worker cannot import from the module
 // tree. It can, once registered with { type: "module" }, which is what removes
 // the copy and the obligation to keep the two in step.
-import { todayKey } from "./dates.js";
-import type { DayKey, Reminder } from "./types.js";
+import { todayKey } from "../core/dates.js";
+import type { DayKey, Reminder } from "../core/types.js";
 
 export const PLAN_CACHE = "gainz-plan";
 export const PLAN_URL = "./notification-plan";

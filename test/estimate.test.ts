@@ -1,10 +1,11 @@
-// The weight/intake estimator. Every function here is pure, so every test is a
-// table of numbers in and a number out — no fakes, no clock, no storage.
+// The weight/intake estimator. Pure functions over raw data: nothing here touches
+// storage or the DOM, and nothing derived is ever persisted. Improving an
+// estimator therefore improves the whole history retroactively.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { defaultConfig, withDefaults } from "../src/config.js";
-import { addDays } from "../src/dates.js";
+import { defaultConfig, withDefaults } from "../src/core/config.js";
+import { addDays } from "../src/core/dates.js";
 import {
   calorieSeries,
   correctedTarget,
@@ -12,14 +13,13 @@ import {
   dayProtein,
   displayBand,
   estimate,
-  holtSeries,
   mifflinBmr,
   projection,
   weekSummary,
   weightSamples,
-  type Sample,
-} from "../src/estimate.js";
-import { DAYS_PER_WEEK, KCAL_PER_KG_FAT, type Config, type Day, type DayKey } from "../src/types.js";
+  type TrendPoint,
+} from "../src/core/estimate.js";
+import { DAYS_PER_WEEK, KCAL_PER_KG_FAT, type Config, type Day, type DayKey } from "../src/core/types.js";
 
 // --------------------------------------------------------------- fixtures
 
@@ -98,194 +98,25 @@ describe("weightSamples", () => {
   });
 });
 
-// ---------------------------------------------------------------- Holt
-
-describe("holtSeries", () => {
-  const series = (kgs: number[], step = 1): Sample[] =>
-    kgs.map((kg, i) => ({ day: on(i * step), kg }));
-
-  it("handles the empty and single-sample cases", () => {
-    assert.deepEqual(holtSeries([], 10, 28), []);
-    assert.deepEqual(holtSeries(series([80]), 10, 28), [{ day: DAY0, kg: 80, slope: 0 }]);
-  });
-
-  it("starts on the first reading rather than at zero", () => {
-    const out = holtSeries(series([80, 81, 82]), 10, 28);
-    assert.equal(out[0]!.kg, 80);
-    assert.equal(out.length, 3);
-  });
-
-  it("holds a constant series constant", () => {
-    for (const s of holtSeries(series(Array(30).fill(80)), 10, 28)) close(s.kg, 80, 1e-9);
-  });
-
-  it("holds it constant across gaps too", () => {
-    // Level and trend both discount by elapsed days, so an irregular weigh-in
-    // schedule must not by itself move the line.
-    const irregular = [0, 1, 5, 6, 14, 30, 31, 60].map((d) => ({ day: on(d), kg: 80 }));
-    for (const s of holtSeries(irregular, 10, 28)) close(s.kg, 80, 1e-9);
-  });
-
-  it("tracks a steady ramp without the lag a level-only smoother has", () => {
-    // The point of carrying a slope, stated as the thing the module header
-    // states it as: how many days behind a moving line the smoother sits.
-    // Measured rather than assumed — the residual error scales with the ramp,
-    // the lag it implies does not, so the lag is the honest invariant.
-    const a = 1 - Math.pow(0.5, 1 / 10);
-    const levelOnlyLag = (1 - a) / a; // ~13.9 days, the mean age of an EWMA's weights
-
-    for (const slope of [0.02, 0.05, 0.1]) {
-      const kgs = Array.from({ length: 90 }, (_, i) => 80 + slope * i);
-      const truth = kgs[kgs.length - 1]!;
-
-      const holt = holtSeries(series(kgs), 10, 28);
-      let ewma = kgs[0]!;
-      for (const kg of kgs.slice(1)) ewma = a * kg + (1 - a) * ewma;
-
-      const holtLag = Math.abs(holt[holt.length - 1]!.kg - truth) / slope;
-      const ewmaLag = Math.abs(ewma - truth) / slope;
-
-      close(ewmaLag, levelOnlyLag, 0.1, `ewma lag at ${slope} kg/day`);
-      assert.ok(holtLag < 2, `holt lags ${holtLag.toFixed(2)} days at ${slope} kg/day`);
-      assert.ok(holtLag * 5 < ewmaLag, `holt ${holtLag} should beat ewma ${ewmaLag} handily`);
-    }
-  });
-
-  it("smooths noise far below its amplitude", () => {
-    // ±1 kg of alternating day-to-day noise around a flat 80.
-    const kgs = Array.from({ length: 60 }, (_, i) => 80 + (i % 2 ? 1 : -1));
-    const out = holtSeries(series(kgs), 10, 28).slice(20);
-    for (const s of out) close(s.kg, 80, 0.25, `smoothed ${s.day}`);
-  });
-
-  it("survives two samples landing on one day", () => {
-    // `weightSamples` cannot produce this — a day holds one weight — but the
-    // smoother is exported and takes any series. A zero gap divides the slope
-    // update by zero, and a single NaN there poisons every later point, so the
-    // floor on the gap is load-bearing rather than defensive.
-    const sameDay = [
-      { day: DAY0, kg: 80 },
-      { day: DAY0, kg: 82 },
-      { day: on(4), kg: 81 },
-    ];
-    for (const s of holtSeries(sameDay, 10, 28)) {
-      assert.ok(Number.isFinite(s.kg), `${s.day} came out ${s.kg}`);
-      close(s.kg, 80.5, 1.5, `smoothed ${s.day}`);
-    }
-  });
-
-  it("emits one point per sample, on the sample's own day", () => {
-    const samples = series([80, 81, 82, 83]);
-    assert.deepEqual(
-      holtSeries(samples, 10, 28).map((s) => s.day),
-      samples.map((s) => s.day),
-    );
-  });
-});
-
-// ------------------------------------------------------------ the slope
-//
-// The slope used to be an internal of the smoother, with TDEE derived from a
-// separate windowed regression. It is now what TDEE is built on, so it carries
-// the properties that regression was there to provide — asserted here on the
-// estimator that actually ships.
-
-describe("holtSeries slope", () => {
-  const series = (kgs: number[]): Sample[] => kgs.map((kg, i) => ({ day: on(i), kg }));
-  const slopeOf = (samples: Sample[], lvl = 10, trend = 28) =>
-    holtSeries(samples, lvl, trend).at(-1)!.slope;
-
-  it("is zero before there is anything to measure", () => {
-    assert.equal(holtSeries(series([80]), 10, 28)[0]!.slope, 0);
-  });
-
-  it("finds no trend in a flat series", () => {
-    close(slopeOf(series(Array(40).fill(80))), 0, 1e-9);
-  });
-
-  it("converges on the true rate of a steady ramp", () => {
-    // The property TDEE depends on: given a constant 0.2 kg/day the smoother
-    // must report 0.2 kg/day, not merely something proportional to it.
-    //
-    // The residual error is a fixed *fraction* of the ramp — 0.25% at 120
-    // samples, for every rate tried — so the tolerance has to be relative. An
-    // absolute one would be slack at 0.01 kg/day and unmeetable at 0.2.
-    for (const perDay of [0.2, -0.05, 0.01]) {
-      const ramp = (n: number) =>
-        slopeOf(series(Array.from({ length: n }, (_, i) => 80 + perDay * i)));
-      const err = Math.abs(ramp(120) - perDay) / Math.abs(perDay);
-      assert.ok(err < 0.005, `${perDay} kg/day: off by ${(err * 100).toFixed(2)}%`);
-      // Converging, not merely close: more data has to mean less error.
-      assert.ok(Math.abs(ramp(240) - perDay) < Math.abs(ramp(120) - perDay));
-    }
-  });
-
-  it("reads elapsed days, not sample index, so gaps do not inflate it", () => {
-    // Same underlying ramp, weighed every third day. A smoother that counted
-    // samples rather than days would report a rate three times too steep.
-    const perDay = 0.1;
-    const dense = Array.from({ length: 120 }, (_, i) => ({ day: on(i), kg: 80 + perDay * i }));
-    const sparse = dense.filter((_, i) => i % 3 === 0);
-    assert.ok(Math.abs(slopeOf(sparse) - perDay) / perDay < 0.01, "sparse finds the true rate");
-    assert.ok(Math.abs(slopeOf(sparse) - slopeOf(dense)) / perDay < 0.01, "sparse matches dense");
-  });
-
-  it("is unmoved by shifting the whole series in time", () => {
-    const base = Array.from({ length: 40 }, (_, i) => ({ day: on(i), kg: 80 + 0.3 * i }));
-    const later = base.map((s) => ({ day: addDays(s.day, 500), kg: s.kg }));
-    close(slopeOf(later), slopeOf(base), 1e-12);
-  });
-
-  it("survives two samples landing on one day", () => {
-    // The gap is floored at one day, so a same-day pair must not divide by zero.
-    const out = holtSeries([...series([80, 81]), { day: on(1), kg: 82 }], 10, 28);
-    for (const p of out) assert.ok(Number.isFinite(p.slope));
-  });
-
-  it("has no window to fall out of: an old outlier decays instead of dropping", () => {
-    // The whole reason for the change. One bad reading, then a long clean
-    // stretch: its influence has to fade *continuously*. A trailing window
-    // instead carries its oldest sample at full weight and then loses it in a
-    // single step, which is what made TDEE lurch.
-    const clean = Array.from({ length: 90 }, (_, i) => ({ day: on(i), kg: 80 }));
-    const spiked = clean.map((s, i) => (i === 5 ? { ...s, kg: 83 } : s));
-
-    const influence = clean.map((_, i) =>
-      Math.abs(
-        holtSeries(spiked.slice(0, i + 1), 10, 28).at(-1)!.slope -
-          holtSeries(clean.slice(0, i + 1), 10, 28).at(-1)!.slope,
-      ),
-    );
-    const peak = Math.max(...influence);
-
-    // Continuity is the assertion, and it is the one a window fails: no single
-    // day may shed more than a tenth of the peak. Note this is deliberately not
-    // a monotonicity check. Every slope estimator's weights sum to zero, so its
-    // influence must cross zero and come back up the far side — here around day
-    // 31 — and demanding monotone decay would be asserting something false.
-    for (let i = 6; i < influence.length; i++) {
-      const step = Math.abs(influence[i]! - influence[i - 1]!);
-      assert.ok(step < peak / 10, `influence jumped ${step} on day ${i}, peak ${peak}`);
-    }
-    assert.ok(influence[89]! < peak / 5, "an 84-day-old outlier should be mostly spent");
-  });
-});
-
 // ---------------------------------------------------------------- projection
 
 describe("projection", () => {
-  const trend = (kgs: number[]) => holtSeries(kgs.map((kg, i) => ({ day: on(i), kg })), 6, 6);
+  const point = (dayOffset: number, kg: number, slope: number): TrendPoint => ({
+    day: on(dayOffset),
+    kg,
+    slope,
+  });
 
   it("is empty when there is nothing to project from, or nowhere to project to", () => {
     assert.deepEqual(projection([], 7), []);
-    assert.deepEqual(projection(trend([80, 81]), 0), []);
-    assert.deepEqual(projection(trend([80, 81]), -3), []);
+    assert.deepEqual(projection([point(0, 80, 0.1)], 0), []);
+    assert.deepEqual(projection([point(0, 80, 0.1)], -3), []);
   });
 
   it("starts on the last trend point, so the two lines meet", () => {
     // Not one day after it. The caller draws this as its own series, and a gap
     // here shows up as a dashed line floating beside the solid one.
-    const t = trend([80, 80.4, 80.9, 81.1]);
+    const t = [point(0, 80, 0), point(3, 81.1, 0.08)];
     const last = t.at(-1)!;
     const p = projection(t, 7);
     assert.equal(p.length, 8, "the shared point, plus one per projected day");
@@ -296,21 +127,21 @@ describe("projection", () => {
   it("carries the reported rate exactly", () => {
     // The whole point of drawing it: the gradient of this line is the number in
     // the headline. If the two ever disagree the chart contradicts the app.
-    const t = trend(Array.from({ length: 60 }, (_, i) => 80 - 0.03 * i));
+    const t = [point(0, 80, -0.01), point(10, 79.7, -0.03)];
     const p = projection(t, 14);
     close((p.at(-1)!.kg - p[0]!.kg) / 14, t.at(-1)!.slope, 1e-12);
   });
 
   it("is straight, one point per day", () => {
-    const p = projection(trend([80, 80.6, 81.4, 81.5, 82.2]), 10);
+    const p = projection([point(4, 82.2, 0.06)], 10);
     for (let i = 1; i < p.length; i++) {
       assert.equal(p[i]!.day, addDays(p[0]!.day, i), "no gaps");
       close(p[i]!.kg - p[i - 1]!.kg, p[1]!.kg - p[0]!.kg, 1e-12);
     }
   });
 
-  it("stays flat when the smoother has no trend to carry", () => {
-    for (const s of projection(trend(Array(40).fill(80)), 7)) close(s.kg, 80, 1e-6);
+  it("stays flat when the trend has no slope to carry", () => {
+    for (const s of projection([point(0, 80, 0)], 7)) close(s.kg, 80, 1e-12);
   });
 });
 

@@ -12,10 +12,10 @@
 // Reads pull from the server once per month per session and fall back to the
 // cache when that fails. localStorage is an offline fallback, never the source
 // of truth — treating it as the latter is what let two devices drift apart.
-import { withDefaults } from "./config.js";
+import { withDefaults } from "../core/config.js";
 import { getFile, putFile } from "./github.js";
 import { loadSettings, type Settings } from "./settings.js";
-import { addDays, byAt, monthOf } from "./dates.js";
+import { addDays, byAt, monthOf } from "../core/dates.js";
 import {
   emptyDay,
   emptyMonth,
@@ -25,7 +25,7 @@ import {
   type Draft,
   type MonthFile,
   type MonthKey,
-} from "./types.js";
+} from "../core/types.js";
 
 const CACHE = "gainz.cache.";
 const OUTBOX = "gainz.outbox";
@@ -268,7 +268,7 @@ export function saveConfig(c: Config): void {
  * server had; without it a locally deleted item is indistinguishable from one
  * the other device just added, and one of the two behaves wrongly.
  */
-function mergeDay(base: Day | undefined, local: Day, remote: Day | undefined): Day {
+export function mergeDay(base: Day | undefined, local: Day, remote: Day | undefined): Day {
   // Remote records we have never seen are the other device's additions. Anything
   // remote that we did know about but no longer hold was deleted here.
   const union = <T extends { id: string }>(b: T[] = [], l: T[] = [], r: T[] = []): T[] => {

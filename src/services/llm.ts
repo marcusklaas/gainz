@@ -12,7 +12,7 @@
 // Keys live on the user's own device and go straight to the provider. That is
 // acceptable only under the conditions agreed in PLAN.md: single user, key never
 // committed, and a hard monthly spend cap on the account.
-import type { Provider } from "./types.js";
+import type { Provider } from "../core/types.js";
 
 const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -48,8 +48,8 @@ const PROMPT = [
   "Never break it down and never give per-100 g values.",
   "",
   "- Assume ordinary portion sizes when the user does not say.",
-  "- Take the user's hints seriously: \"light\", \"not heavy on calories\", \"big\",",
-  "  \"just a bit\" should visibly move the estimate.",
+  '- Take the user\'s hints seriously: "light", "not heavy on calories", "big",',
+  '  "just a bit" should visibly move the estimate.',
   "- Also give kcal_low and kcal_high: a range you are 90% sure contains the",
   "  true total. Keep it tight when amounts are weighed or stated; widen it for",
   "  vague portions, restaurant food, and hidden fats like oils, butter, cheese",
@@ -153,33 +153,47 @@ async function callOpenAI(text: string, o: Options): Promise<string> {
   throw new Error("Response contained no text");
 }
 
-export async function estimateFood(text: string, o: Options): Promise<Estimated> {
-  const json = o.provider === "openai" ? await callOpenAI(text, o) : await callAnthropic(text, o);
+/** Coerces finite numbers and numeric strings; rejects null, blanks and booleans. */
+function asNumber(v: unknown): number {
+  if (typeof v === "number") return v;
+  if (typeof v === "string" && v.trim() !== "") return Number(v);
+  return NaN;
+}
 
+/**
+ * Validates the model's JSON reply and converts its 90% calorie interval into
+ * 1-sigma `kcal_sd`. Pure so tests can exercise every malformed/edge shape
+ * without mocking fetch.
+ */
+export function parseEstimate(json: string): Estimated {
   // Structured output should guarantee JSON, but a refusal or a truncated reply
   // would surface here as a raw parser error otherwise.
-  let payload: { kcal?: unknown; protein_g?: unknown; kcal_low?: unknown; kcal_high?: unknown };
+  let raw: unknown;
   try {
-    payload = JSON.parse(json) as {
-      kcal?: unknown;
-      protein_g?: unknown;
-      kcal_low?: unknown;
-      kcal_high?: unknown;
-    };
+    raw = JSON.parse(json);
   } catch {
     throw new Error("Could not read the estimate. Try rephrasing.");
   }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Could not read the estimate. Try rephrasing.");
+  }
+  const payload = raw as {
+    kcal?: unknown;
+    protein_g?: unknown;
+    kcal_low?: unknown;
+    kcal_high?: unknown;
+  };
 
   // The model is untrusted input, so both numbers are checked before use.
-  const kcal = Number(payload.kcal);
-  const protein = Number(payload.protein_g);
+  const kcal = asNumber(payload.kcal);
+  const protein = asNumber(payload.protein_g);
   if (!Number.isFinite(kcal) || !Number.isFinite(protein)) {
     throw new Error("Estimate came back without usable numbers");
   }
   // The interval is converted to an sd immediately and never stored: the app
   // only speaks sd, the same unit the manual percent rule produces.
-  const low = Number(payload.kcal_low);
-  const high = Number(payload.kcal_high);
+  const low = asNumber(payload.kcal_low);
+  const high = asNumber(payload.kcal_high);
   const sd =
     Number.isFinite(low) && Number.isFinite(high)
       ? Math.round(Math.abs(high - low) / INTERVAL90_WIDTH_IN_SD)
@@ -189,4 +203,9 @@ export async function estimateFood(text: string, o: Options): Promise<Estimated>
     protein_g: Math.round(protein * 10) / 10,
     ...(sd === undefined ? {} : { kcal_sd: sd }),
   };
+}
+
+export async function estimateFood(text: string, o: Options): Promise<Estimated> {
+  const json = o.provider === "openai" ? await callOpenAI(text, o) : await callAnthropic(text, o);
+  return parseEstimate(json);
 }

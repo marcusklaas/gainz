@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 // re-reads TZ on assignment, and nothing in dates.ts captures it at import.
 process.env.TZ = "Europe/Amsterdam";
 
-import { addDays, atKey, atTime, byAt, daysBetween, humanDay, monthOf, parseDay, toDayKey, todayKey } from "../src/dates.js";
+import { addDays, atKey, atTime, byAt, daysBetween, humanDay, monthOf, parseDay, toDayKey, todayKey } from "../src/core/dates.js";
 
 describe("toDayKey / parseDay", () => {
   it("pads month and day to two digits", () => {

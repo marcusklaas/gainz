@@ -21,14 +21,14 @@ TypeScript, no framework, no bundler. The only dependency is
 ```
 bun install
 bun run build     # tsc: src/ -> js/
-bun run test      # bun test over the estimators
+bun run test      # bun test over the pure logic
 bun run serve     # http://localhost:8080
 ```
 
-Tests cover the pure half of the app — `dates`, `estimate`, `lifts` and
-`export`, which is where all the arithmetic lives. They compile through `tsconfig.test.json` into
-`test-build/` and run on Bun's test runner, so there is no test framework
-to install.
+Tests cover the pure half of the app — `dates`, `joint3`, `estimate`, `lifts`,
+`export`, `datalist`, `store` (`mergeDay`), and `llm` (`parseEstimate`). They
+compile through `tsconfig.test.json` into `test-build/` and run on Bun's test
+runner, so there is no test framework to install.
 
 `.github/workflows/checks.yml` runs the build and the tests on every pull
 request, and pushing to `main` runs the same job before publishing via

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { needsDatalistFallback, suggestions } from "../src/datalist.js";
+import { needsDatalistFallback, suggestions } from "../src/ui/datalist.js";
 
 const FIREFOX_ANDROID = "Mozilla/5.0 (Android 14; Mobile; rv:143.0) Gecko/143.0 Firefox/143.0";
 const FIREFOX_TABLET = "Mozilla/5.0 (Android 14; Tablet; rv:143.0) Gecko/143.0 Firefox/143.0";

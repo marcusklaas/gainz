@@ -9,7 +9,7 @@
 // Reminders: the page writes a plan into its own cache and this file only reads
 // it and rings, so both halves share one module. That is why the worker is
 // registered as { type: "module" } — see the register call in src/main.ts.
-import { checkReminders, PLAN_CACHE, SYNC_TAG } from "./js/reminders.js";
+import { checkReminders, PLAN_CACHE, SYNC_TAG } from "./js/services/reminders.js";
 
 const CACHE = `gainz-__VERSION__`;
 

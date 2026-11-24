@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { defaultConfig, withDefaults } from "../src/config.js";
-import { addDays } from "../src/dates.js";
+import { defaultConfig, withDefaults } from "../src/core/config.js";
+import { addDays } from "../src/core/dates.js";
 import {
   confirmedSets,
   draftOf,
@@ -34,8 +34,8 @@ import {
   templateNames,
   type DatedSession,
   type LiftPoint,
-} from "../src/lifts.js";
-import { WATHEN, type Day, type DayKey, type Draft, type DraftExercise, type Session } from "../src/types.js";
+} from "../src/core/lifts.js";
+import { WATHEN, type Day, type DayKey, type Draft, type DraftExercise, type Session } from "../src/core/types.js";
 
 // --------------------------------------------------------------- fixtures
 

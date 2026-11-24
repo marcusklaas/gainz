@@ -2,8 +2,8 @@
 // keep one timer armed for whatever is due next while the app is open. The plan
 // itself, the wording, and the background half live in reminders.ts, which the
 // service worker imports too.
-import { defaultConfig } from "./config.js";
-import { todayKey } from "./dates.js";
+import { defaultConfig } from "../core/config.js";
+import { todayKey } from "../core/dates.js";
 import {
   isPending,
   KINDS,
@@ -15,7 +15,7 @@ import {
   type Kind,
   type Plan,
 } from "./reminders.js";
-import type { Config, Day } from "./types.js";
+import type { Config, Day } from "../core/types.js";
 
 /**
  * Rebuilds the plan from today's data and re-arms the timer. Idempotent and

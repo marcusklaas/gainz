@@ -4,11 +4,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { withDefaults } from "../src/config.js";
-import { addDays } from "../src/dates.js";
-import { buildContext, contextFrom, WINDOW } from "../src/export.js";
-import { e1rm, e1rmPoints, sessionsOf, strengthIndex } from "../src/lifts.js";
-import type { Config, Day, DayKey, FoodItem, Session } from "../src/types.js";
+import { withDefaults } from "../src/core/config.js";
+import { addDays } from "../src/core/dates.js";
+import { buildContext, contextFrom, WINDOW } from "../src/core/export.js";
+import { e1rm, e1rmPoints, sessionsOf, strengthIndex } from "../src/core/lifts.js";
+import type { Config, Day, DayKey, FoodItem, Session } from "../src/core/types.js";
 
 // --------------------------------------------------------------- fixtures
 
