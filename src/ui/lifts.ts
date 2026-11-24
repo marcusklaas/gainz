@@ -349,7 +349,11 @@ function renderEditor(): void {
   $<HTMLButtonElement>("l-save").disabled = confirmedSets(d) === 0;
 }
 
-export function initLifts(deps: { show: (name: Screen) => void; sync: () => Promise<void> }): void {
+export function initLifts(deps: {
+  show: (name: Screen) => void;
+  sync: () => Promise<void>;
+  render: (src?: Source) => Promise<void>;
+}): void {
   showScreen = deps.show;
 
   $("lift-resume").addEventListener("click", () => enter());
@@ -419,9 +423,13 @@ export function initLifts(deps: { show: (name: Screen) => void; sync: () => Prom
       clearDraft();
       draft = null;
     }
-    await deps.sync();
+    // Leave the editor and refresh Trend immediately from cache before pushing
+    // to GitHub, so tapping Trend right away sees the new session and a slow
+    // network never stalls navigation.
     deps.show("lifts");
     flash("lifts-msg", "Session saved.");
+    await deps.render("cache");
+    await deps.sync();
   });
 
   $("l-discard").addEventListener("click", () => {
@@ -443,8 +451,9 @@ export function initLifts(deps: { show: (name: Screen) => void; sync: () => Prom
       if (left.length) x.sessions = left;
       else delete x.sessions;
     });
-    await deps.sync();
     deps.show("lifts");
     flash("lifts-msg", "Session deleted.");
+    await deps.render("cache");
+    await deps.sync();
   });
 }

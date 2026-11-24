@@ -37,7 +37,11 @@ import {
 import { paintChart, renderWeek, updateTrendHistory, updateTrendWeight } from "./ui/trend.js";
 import type { Config, Day, DayKey, FoodItem } from "./core/types.js";
 
-let day = todayKey();
+/** Tracked separately from `day` so leaving the PWA open overnight advances
+ *  to the new morning whenever the user was on "today", without disturbing
+ *  someone who deliberately browsed back to inspect an older day. */
+let lastToday = todayKey();
+let day = lastToday;
 
 // ------------------------------------------------------------- the day lock
 //
@@ -169,6 +173,17 @@ function syncStatus(): void {
     el.textContent = "";
     el.title = "";
   }
+  el.classList.toggle("err", syncAuthError);
+  if (syncAuthError) {
+    el.textContent = n ? `Token error · ${n} pending` : "Token error";
+    el.title = "GitHub rejected your token — tap to update it in Settings";
+  } else if (n) {
+    el.textContent = `${n} pending`;
+    el.title = "Tap to retry sync";
+  } else {
+    el.textContent = "";
+    el.title = "";
+  }
 }
 
 async function sync(): Promise<void> {
@@ -176,6 +191,7 @@ async function sync(): Promise<void> {
   try {
     await flush();
     if (hadPending) syncAuthError = false;
+      if (hadPending) syncAuthError = false;
   } catch (err) {
     syncAuthError = isAuthError(err);
     // Stays queued.
@@ -246,7 +262,7 @@ $("prev-day").addEventListener("click", () => goTo(addDays(day, -1)));
  * and anything beyond it is a calendar nobody asked for.
  */
 $("next-day").addEventListener("click", () => {
-  if (day === addDays(todayKey(), 1)) return;
+  if (day >= addDays(todayKey(), 1)) return;
   goTo(addDays(day, 1));
 });
 
@@ -363,40 +379,55 @@ function renderLock(): void {
 }
 
 /** Detached from render(), so a failure here cannot surface as an unhandled rejection. */
-async function planReminders(cfg: Config | null, d: Day, src: Source): Promise<void> {
+async function planReminders(
+  cfg: Config | null,
+  viewDay: DayKey,
+  today: DayKey,
+  d: Day,
+  src: Source,
+): Promise<void> {
   try {
-    await updatePlan(cfg, day === todayKey() ? d : await readDay(todayKey(), src));
+    await updatePlan(cfg, viewDay === today ? d : await readDay(today, src));
   } catch {
     // Reminders are best effort by design; see the note under Settings.
   }
 }
 
+/** Sequence token so overlapping async render() calls (rapid ‹/› taps or
+ *  cache/server passes) never paint stale data or pin a goal onto the wrong day. */
+let renderSeq = 0;
+
 async function render(src: Source = "server"): Promise<void> {
+  const seq = ++renderSeq;
+  const stale = () => seq !== renderSeq;
+  const viewDay = day;
+  const today = todayKey();
   const cfg = cachedConfig();
 
   // Started before the first await so that the month holding the day on screen
   // and the months behind the estimator window go out together. readMonth
   // collapses the overlap between the two into one request.
-  const history = cfg ? readRange(addDays(day, -cfg.estimator.historyDays), day, src) : null;
+  const history = cfg ? readRange(addDays(viewDay, -cfg.estimator.historyDays), viewDay, src) : null;
 
   // Always about now, whichever day is on screen — so it cannot read from the
-  // history above, which ends at `day` and would be missing the last few days
+  // history above, which ends at `viewDay` and would be missing the last few days
   // whenever you have browsed backwards. Its months are almost always already
   // inside that range, and readMonth collapses the overlap into no new request.
-  const today = todayKey();
   const week = readRange(addDays(today, -(WEEK_DAYS - 1)), today, src);
 
-  const d = await readDay(day, src);
-  $("day-label").textContent = humanDay(day);
+  const d = await readDay(viewDay, src);
+  if (stale()) return;
+
+  $("day-label").textContent = humanDay(viewDay);
   renderLock();
-  $<HTMLButtonElement>("next-day").disabled = day === addDays(today, 1);
+  $<HTMLButtonElement>("next-day").disabled = viewDay >= addDays(today, 1);
 
   // Tomorrow is food only, and it says so in place: the weight box and the
   // complete tick are dimmed and disabled rather than hidden, so the layout
   // holds still between today and tomorrow. The tick is what admits a day
   // into the TDEE fit, and a weigh-in for a day that has not happened is a
   // nonsense number — both stay out of reach until the day arrives.
-  const future = day > today;
+  const future = viewDay > today;
   for (const id of ["weight-form", "logging-row", "logging-note"]) {
     $(id).classList.toggle("dimmed", future);
   }
@@ -411,23 +442,29 @@ async function render(src: Source = "server"): Promise<void> {
   // and are re-planned here so that saving a weight silences one immediately.
   // Not awaited: it is a Cache API round trip plus, on an older day, a month
   // read, and nothing on screen waits on the answer.
-  void planReminders(cfg, d, src);
+  void planReminders(cfg, viewDay, today, d, src);
   if (!cfg) return;
 
   const past = await history!;
-  const est = estimate(cfg, past, day);
+  if (stale()) return;
+  const est = estimate(cfg, past, viewDay);
 
   // Read over the same history and dated to the same day as the weight chart
   // beside it, so browsing back moves both pictures together rather than one.
-  updateTrendHistory(day, past, cfg);
+  updateTrendHistory(viewDay, past, cfg);
 
   // Only ever pinned from a server read. The cache pass exists to put something
   // on screen fast, and a number derived from a stale month is not one to write
   // down permanently as what today was judged against.
-  if (est && src === "server") await recordGoal(d, est);
-  renderGoals(d, est, cfg, day >= today);
+  if (est && src === "server") {
+    await recordGoal(viewDay, today, d, est);
+    if (stale()) return;
+  }
+  renderGoals(d, est, cfg, viewDay >= today);
   updateTrendWeight(est);
-  renderWeek(await week, est);
+  const weekDays = await week;
+  if (stale()) return;
+  renderWeek(weekDays, est);
 }
 
 /**
@@ -440,10 +477,10 @@ async function render(src: Source = "server"): Promise<void> {
  * what the user sees. The log is here so that when it moves, there is somewhere
  * to look and find out why.
  */
-async function recordGoal(d: Day, est: Estimate): Promise<void> {
-  if (day === todayKey() && d.goal_kcal === undefined) {
+async function recordGoal(viewDay: DayKey, today: DayKey, d: Day, est: Estimate): Promise<void> {
+  if (viewDay === today && d.goal_kcal === undefined) {
     d.goal_kcal = Math.round(est.goalKcal);
-    await updateDay(day, (x) => {
+    await updateDay(viewDay, (x) => {
       x.goal_kcal ??= d.goal_kcal;
     });
   }
@@ -552,7 +589,7 @@ function renderItems(d: Day): void {
 
 // -------------------------------------------------------------------- start
 
-initLifts({ show, sync });
+initLifts({ show, sync, render });
 initSettings({ sync, render });
 
 addEventListener("online", () => void sync());
@@ -563,9 +600,19 @@ addEventListener("online", () => void sync());
  * on a phone every extra request is a visible delay.
  */
 async function refresh(): Promise<void> {
-  invalidateMonths(monthOf(day), monthOf(todayKey()));
+  const now = todayKey();
+  const prevToday = lastToday;
+  if (now !== prevToday) {
+    lastToday = now;
+    if (day === prevToday) {
+      day = now;
+      unlocked = false;
+    }
+  }
+  invalidateMonths(monthOf(day), monthOf(now), monthOf(prevToday));
   await sync();
   await render();
+  if (!$("lifts").hidden) void renderLifts();
 }
 
 addEventListener("visibilitychange", () => {
