@@ -27,12 +27,11 @@ import {
 } from "../core/lifts.js";
 import {
   cachedConfig,
+  cachedRange,
   clearDraft,
   readDraft,
-  readRange,
   updateDay,
   writeDraft,
-  type Source,
 } from "../services/store.js";
 import type { DayKey, Draft } from "../core/types.js";
 
@@ -40,12 +39,12 @@ import type { DayKey, Draft } from "../core/types.js";
  *  months are already fetched and the screen costs no extra requests. */
 const historyDays = () => cachedConfig()?.estimator.historyDays ?? 180;
 
-/** Sessions in that window, newest first. Re-read whenever one is written. */
+/** Sessions in that window, newest first. Pulled synchronously from cache on render. */
 let sessions: DatedSession[] = [];
 
-async function loadSessions(src: Source = "cache"): Promise<void> {
+function loadSessions(): void {
   const today = todayKey();
-  sessions = sessionsOf(await readRange(addDays(today, -historyDays()), today, src));
+  sessions = sessionsOf(cachedRange(addDays(today, -historyDays()), today));
 }
 
 /**
@@ -84,8 +83,8 @@ function editDraft(fn: (d: Draft) => void): void {
   renderEditor();
 }
 
-export async function renderLifts(): Promise<void> {
-  await loadSessions();
+export function renderLifts(): void {
+  loadSessions();
   draft ??= readDraft();
 
   const names = templateNames(sessions);
@@ -230,7 +229,7 @@ function renderEditor(): void {
       const number = (value: number, step: string, unit: string, apply: (n: number) => void) => {
         const i = document.createElement("input");
         i.type = "number";
-        i.inputMode = "decimal";
+        i.inputMode = unit === "kg" ? "decimal" : "numeric";
         i.min = "0";
         i.step = step;
         i.className = unit;
@@ -245,7 +244,9 @@ function renderEditor(): void {
         // its own edit.
         i.addEventListener("change", () =>
           editDraft((x) => {
-            apply(Number(i.value));
+            const raw = Number(i.value);
+            const clean = Number.isFinite(raw) && raw > 0 ? (unit === "reps" ? Math.round(raw) : raw) : 0;
+            apply(clean);
             set.done = set.reps > 0;
             if (unit === "kg" && set.done) propagateWeight(x.exercises[ei]!, si, set.weight_kg);
           }),
@@ -419,9 +420,11 @@ export function initLifts(deps: { show: (name: Screen) => void; sync: () => Prom
       clearDraft();
       draft = null;
     }
-    await deps.sync();
+    // updateDay() already bumped store.revision(), so Lifts and Trend both pull
+    // fresh data automatically with no cross-screen plumbing.
     deps.show("lifts");
     flash("lifts-msg", "Session saved.");
+    await deps.sync();
   });
 
   $("l-discard").addEventListener("click", () => {
@@ -443,8 +446,8 @@ export function initLifts(deps: { show: (name: Screen) => void; sync: () => Prom
       if (left.length) x.sessions = left;
       else delete x.sessions;
     });
-    await deps.sync();
     deps.show("lifts");
     flash("lifts-msg", "Session deleted.");
+    await deps.sync();
   });
 }

@@ -12,6 +12,12 @@
 // Reads pull from the server once per month per session and fall back to the
 // cache when that fails. localStorage is an offline fallback, never the source
 // of truth — treating it as the latter is what let two devices drift apart.
+//
+// Every change to cached data — local edit, config save, server pull, or sync
+// merge — flows through writeCache(), which bumps a monotonic revision counter
+// and notifies subscribers on a coalesced microtask. Screens pull from the
+// cache and key their derived work on revision(), so no write path ever has to
+// remember which other screens depend on what it touched.
 import { withDefaults } from "../core/config.js";
 import { getFile, putFile } from "./github.js";
 import { loadSettings, type Settings } from "./settings.js";
@@ -46,6 +52,36 @@ export function monthPath(m: MonthKey): string {
   return `data/${m.slice(0, 4)}/${m}.json`;
 }
 
+// ------------------------------------------------------------ revision / sub
+
+let rev = 0;
+const listeners = new Set<() => void>();
+let notifyQueued = false;
+
+/** Monotonic version of all cached store data (months + config). */
+export function revision(): number {
+  return rev;
+}
+
+/**
+ * Fires on a coalesced microtask whenever any cached month or config actually
+ * changes — whether from a local write, a server pull, or a sync merge.
+ */
+export function onChange(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function bumpRevision(): void {
+  rev++;
+  if (!listeners.size || notifyQueued) return;
+  notifyQueued = true;
+  queueMicrotask(() => {
+    notifyQueued = false;
+    for (const fn of listeners) fn();
+  });
+}
+
 function settings(): Settings {
   const s = loadSettings();
   if (!s) throw new Error("Not configured");
@@ -63,8 +99,10 @@ function readCache(path: string): string | null {
  * read answer 304 and quietly bless an unsynced local edit as server truth.
  */
 function writeCache(path: string, text: string): void {
+  const changed = readCache(path) !== text;
   localStorage.setItem(CACHE + path, text);
   writeEtag(path, null);
+  if (changed) bumpRevision();
 }
 
 function readBase(path: string): MonthFile | null {
@@ -94,7 +132,17 @@ function writeOutbox(o: Outbox): void {
   localStorage.setItem(OUTBOX, JSON.stringify(o));
 }
 
+function isDirty(path: string): boolean {
+  return Object.prototype.hasOwnProperty.call(readOutbox(), path);
+}
+
+/** Monotonic per-path edit counter, so flush() can tell whether a newer local
+ *  write landed while a PUT was in flight and avoid clearing the outbox entry. */
+const pathGen = new Map<string, number>();
+const gen = (path: string): number => pathGen.get(path) ?? 0;
+
 function markDirty(path: string, day: DayKey | null): void {
+  pathGen.set(path, gen(path) + 1);
   const o = readOutbox();
   if (day === null) {
     o[path] = null;
@@ -116,7 +164,10 @@ export function pendingWrites(): number {
 
 async function fetchMonth(m: MonthKey): Promise<MonthFile> {
   const path = monthPath(m);
+  if (isDirty(path)) return cachedMonth(m) ?? emptyMonth();
   const remote = await getFile(settings(), path, readEtag(path));
+  // A local edit may have landed while the GET was in flight; never clobber it.
+  if (isDirty(path)) return cachedMonth(m) ?? emptyMonth();
   if (remote.kind === "unchanged") return cachedMonth(m) ?? emptyMonth();
 
   const text = remote.kind === "file" ? remote.text : JSON.stringify(emptyMonth());
@@ -158,7 +209,8 @@ export type Source = "server" | "cache";
  * device happened to have cached.
  */
 export async function readMonth(m: MonthKey, src: Source = "server"): Promise<MonthFile> {
-  if (src === "server" && !fetched.has(m)) {
+  const path = monthPath(m);
+  if (src === "server" && !fetched.has(m) && !isDirty(path)) {
     let pending = inFlight.get(m);
     if (!pending) {
       pending = fetchMonth(m).finally(() => inFlight.delete(m));
@@ -166,7 +218,7 @@ export async function readMonth(m: MonthKey, src: Source = "server"): Promise<Mo
     }
     try {
       const file = await pending;
-      fetched.add(m);
+      if (!isDirty(path)) fetched.add(m);
       return file;
     } catch {
       // Offline, or the token is unhappy. The cache below still renders.
@@ -180,16 +232,46 @@ export async function readDay(day: DayKey, src: Source = "server"): Promise<Day>
   return month.days[day] ?? emptyDay();
 }
 
+/** Synchronous cache read for screen rendering. Never touches the network. */
+export function cachedDay(day: DayKey): Day {
+  return cachedMonth(monthOf(day))?.days[day] ?? emptyDay();
+}
+
+function monthsIn(from: DayKey, to: DayKey): MonthKey[] {
+  const months = new Set<MonthKey>();
+  for (let d = from; d <= to; d = addDays(d, 1)) months.add(monthOf(d));
+  return [...months];
+}
+
+/** Synchronous cache read across [from, to]. Never touches the network. */
+export function cachedRange(from: DayKey, to: DayKey): Map<DayKey, Day> {
+  const out = new Map<DayKey, Day>();
+  for (const m of monthsIn(from, to)) {
+    const file = cachedMonth(m);
+    if (!file) continue;
+    for (const [day, value] of Object.entries(file.days)) {
+      if (day >= from && day <= to) out.set(day, value);
+    }
+  }
+  return out;
+}
+
+/**
+ * Pulls any unfetched, non-dirty months covering [from, to] from the server in
+ * parallel. Any month whose body changed updates the cache, bumps revision(),
+ * and notifies onChange subscribers automatically.
+ */
+export async function ensureRange(from: DayKey, to: DayKey): Promise<void> {
+  await Promise.all(monthsIn(from, to).map((m) => readMonth(m, "server")));
+}
+
 /**
  * Every logged day in [from, to], across however many month files that spans.
  * The months go out together: a 180-day history is seven files, and fetching
  * them one after another is seven round trips of latency stacked end to end.
  */
 export async function readRange(from: DayKey, to: DayKey, src: Source = "server"): Promise<Map<DayKey, Day>> {
-  const months = new Set<MonthKey>();
-  for (let d = from; d <= to; d = addDays(d, 1)) months.add(monthOf(d));
-
-  const files = await Promise.all([...months].map((m) => readMonth(m, src)));
+  const files = await Promise.all(monthsIn(from, to).map((m) => readMonth(m, src)));
 
   const out = new Map<DayKey, Day>();
   for (const file of files) {
@@ -202,7 +284,10 @@ export async function readRange(from: DayKey, to: DayKey, src: Source = "server"
 
 export async function updateDay(day: DayKey, fn: (d: Day) => void): Promise<void> {
   const m = monthOf(day);
-  const month = await readMonth(m);
+  await readMonth(m);
+  // Re-read synchronously after the await so two concurrent updates in the same
+  // tick compose against the latest cache rather than clobbering each other.
+  const month = cachedMonth(m) ?? emptyMonth();
   const current = month.days[day] ?? emptyDay();
   fn(current);
   month.days[day] = current;
@@ -248,7 +333,9 @@ export function cachedConfig(): Config | null {
 }
 
 export async function refreshConfig(): Promise<Config | null> {
+  if (isDirty(CONFIG_PATH)) return cachedConfig();
   const remote = await getFile(settings(), CONFIG_PATH, readEtag(CONFIG_PATH));
+  if (isDirty(CONFIG_PATH)) return cachedConfig();
   if (remote.kind === "missing") return null;
   if (remote.kind === "unchanged") return cachedConfig();
   writeCache(CONFIG_PATH, remote.text);
@@ -308,17 +395,22 @@ export function mergeDay(base: Day | undefined, local: Day, remote: Day | undefi
   return day;
 }
 
-async function flushPath(path: string, dirtyDays: DayKey[] | null): Promise<void> {
-  const localText = readCache(path);
-  if (localText === null) return;
-
+async function flushPath(path: string): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt++) {
     // Unconditional: this needs the remote body to merge against and its sha to
     // write with, so there is nothing a 304 could save here.
     const remote = await getFile(settings(), path);
     const current = remote.kind === "file" ? remote : null;
-    let text: string;
 
+    // Snapshot local state *after* the async GET so any edit that landed while
+    // GET was in flight is folded into this push and never overwritten.
+    const snapGen = gen(path);
+    const dirtyDays = readOutbox()[path];
+    if (dirtyDays === undefined) return;
+    const localText = readCache(path);
+    if (localText === null) return;
+
+    let text: string;
     if (dirtyDays === null) {
       text = localText;
     } else {
@@ -332,6 +424,9 @@ async function flushPath(path: string, dirtyDays: DayKey[] | null): Promise<void
       }
       merged.days = Object.fromEntries(Object.entries(merged.days).sort(([a], [b]) => a.localeCompare(b)));
       text = JSON.stringify(merged, null, 2);
+      // Persist the merged month before yielding to PUT, so any edit that lands
+      // while PUT is in flight builds on top of the merged items rather than
+      // losing remote additions once base advances to `text` below.
       writeCache(path, text);
     }
 
@@ -342,6 +437,13 @@ async function flushPath(path: string, dirtyDays: DayKey[] | null): Promise<void
       // read of this path goes out unconditional.
       writeBase(path, text);
       writeEtag(path, null);
+      // Only clear the outbox entry when nothing newer arrived during the PUT;
+      // otherwise leave it dirty so drainOutbox() pushes the newer edit next.
+      if (gen(path) === snapGen) {
+        const o = readOutbox();
+        delete o[path];
+        writeOutbox(o);
+      }
       return;
     } catch (e) {
       const status = (e as { status?: number }).status;
@@ -352,13 +454,26 @@ async function flushPath(path: string, dirtyDays: DayKey[] | null): Promise<void
   throw new Error(`Could not sync ${path} after 3 attempts`);
 }
 
-/** Drains the outbox. Safe to call repeatedly; a failure leaves work queued. */
-export async function flush(): Promise<void> {
-  if (!loadSettings()) return;
-  for (const [path, days] of Object.entries(readOutbox())) {
-    await flushPath(path, days);
-    const o = readOutbox();
-    delete o[path];
-    writeOutbox(o);
+/** Single-flight lock so overlapping callers share one drain pass. */
+let flushing: Promise<void> | null = null;
+
+async function drainOutbox(): Promise<void> {
+  try {
+    while (true) {
+      const entries = Object.keys(readOutbox());
+      if (!entries.length) return;
+      for (const path of entries) {
+        await flushPath(path);
+      }
+    }
+  } finally {
+    flushing = null;
   }
+}
+
+/** Drains the outbox. Safe to call concurrently; a failure leaves work queued. */
+export function flush(): Promise<void> {
+  if (!loadSettings()) return Promise.resolve();
+  flushing ??= drainOutbox();
+  return flushing;
 }

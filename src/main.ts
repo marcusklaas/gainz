@@ -1,17 +1,16 @@
 // Entry point: boot, screen navigation, sync plumbing, setup, and the Today
 // screen. Lifts, Trend, and Settings/Export live in their own UI modules.
+//
+// Data flow is pull-based: every write (local edit, config save, server fetch,
+// sync merge) goes through store.ts and bumps store.revision(). Screens render
+// synchronously from the cache and skip work when their inputs have not moved,
+// while store.onChange() repaints whichever screen is currently visible.
 import { installDatalistFallback } from "./ui/datalist.js";
 import { addDays, humanDay, monthOf, nowStamp, todayKey } from "./core/dates.js";
 import { $, DASH, msg, num, round, val, type Screen } from "./ui/dom.js";
-import {
-  dayKcal,
-  dayProtein,
-  displayBand,
-  estimate,
-  WEEK_DAYS,
-  type Estimate,
-} from "./core/estimate.js";
-import { checkAccess } from "./services/github.js";
+import { dayKcal, dayProtein, displayBand, WEEK_DAYS, type Estimate } from "./core/estimate.js";
+import { historyFor } from "./services/derived.js";
+import { checkAccess, isAuthError } from "./services/github.js";
 import { clearEdit, initLifts, renderLifts } from "./ui/lifts.js";
 import { estimateFood } from "./services/llm.js";
 import { updatePlan } from "./services/notify.js";
@@ -25,19 +24,24 @@ import {
 import { fillSettingsForms, initSettings, needsConfig } from "./ui/settings.js";
 import {
   cachedConfig,
+  cachedDay,
+  ensureRange,
   flush,
   invalidateMonths,
+  onChange,
   pendingWrites,
-  readDay,
-  readRange,
   refreshConfig,
+  revision,
   updateDay,
-  type Source,
 } from "./services/store.js";
-import { paintChart, renderWeek, updateTrendHistory, updateTrendWeight } from "./ui/trend.js";
+import { renderTrend } from "./ui/trend.js";
 import type { Config, Day, DayKey, FoodItem } from "./core/types.js";
 
-let day = todayKey();
+/** Tracked separately from `day` so leaving the PWA open overnight advances
+ *  to the new morning whenever the user was on "today", without disturbing
+ *  someone who deliberately browsed back to inspect an older day. */
+let lastToday = todayKey();
+let day = lastToday;
 
 // ------------------------------------------------------------- the day lock
 //
@@ -74,20 +78,22 @@ const locked = (): boolean => day !== todayKey() && !unlocked;
 function goTo(next: DayKey): void {
   day = next;
   unlocked = false;
-  void render();
+  renderActive();
+  void pullHistory(next);
 }
 
 // ------------------------------------------------------------------- boot
 
 /**
  * Two passes on purpose. The first is pure localStorage and paints the day that
- * was on screen last time before a single request goes out; the second is the
- * authoritative one and corrects it. GitHub is a slow data store and always will
- * be, so the fix is to stop the UI waiting on it to draw anything at all.
+ * was on screen last time before a single request goes out; the second pulls
+ * from GitHub and lets store.onChange() repaint if anything moved. GitHub is a
+ * slow data store and always will be, so the fix is to stop the UI waiting on
+ * it to draw anything at all.
  *
  * The order of the network half is load-bearing: queued writes have to land
- * before the months are re-read, or fetchMonth would overwrite the cache that
- * holds them. flush() is a no-op with an empty outbox, which is the normal case.
+ * before the months are re-read, or fetchMonth would skip dirty paths. flush()
+ * is a no-op with an empty outbox, which is the normal case.
  */
 async function boot(): Promise<void> {
   if (!isConfigured()) {
@@ -95,28 +101,44 @@ async function boot(): Promise<void> {
     return;
   }
   $("app").hidden = false;
-  show("today");
-
   fillSettingsForms();
-  await render("cache");
+  show("today");
 
   try {
     await flush();
     const cfg = await refreshConfig();
+    syncAuthError = false;
     if (!cfg) needsConfig(show);
-  } catch {
+  } catch (err) {
+    if (isAuthError(err)) syncAuthError = true;
     // Offline is fine; cached data still renders and writes stay queued.
   }
   fillSettingsForms();
-  await render();
+  await pullHistory(day);
+  if (await recordGoalIfNeeded(true)) await sync();
+  renderActive();
   syncStatus();
 }
 
 // ----------------------------------------------------------------- screens
 
 const SCREENS: readonly Screen[] = ["today", "lifts", "lift", "trend", "settings"];
+let activeScreen: Screen = "today";
+
+/**
+ * Repaints whichever screen is on show, synchronously from the cache. The lift
+ * editor and Settings own in-progress form state, so background store updates
+ * leave them alone; the other screens pull fresh data automatically.
+ */
+function renderActive(): void {
+  if ($("app").hidden) return;
+  if (activeScreen === "today") renderToday(day);
+  else if (activeScreen === "trend") renderTrend(day);
+  else if (activeScreen === "lifts") renderLifts();
+}
 
 function show(name: Screen): void {
+  activeScreen = name;
   // Leaving the editor ends an edit of a past session, whether that was the
   // back button, the nav, or a save. One place rather than each of them, so
   // there is no route out that forgets. A session in progress is untouched:
@@ -129,43 +151,70 @@ function show(name: Screen): void {
   // The editor is part of Lifts as far as the nav is concerned; nothing else
   // would be lit while it is open.
   const tab = name === "lift" ? "lifts" : name;
-  for (const b of document.querySelectorAll<HTMLButtonElement>("nav button")) {
+  for (const b of document.querySelectorAll<HTMLButtonElement>("nav button[data-screen]")) {
     b.setAttribute("aria-current", String(b.dataset["screen"] === tab));
   }
-  // uPlot sizes from the container, which measures zero while hidden, so the
-  // chart can only be built once its section is on screen.
-  // Unconditional: the three charts are independent, and a log with sessions but
-  // no weigh-ins still has a strength index to draw.
-  if (name === "trend") void paintChart();
-  if (name === "lifts") void renderLifts();
-  // Repaints the lock that arriving here just reset. Without this the fields
-  // stay looking editable while commit() has already started refusing them,
-  // which is the one failure mode worse than the lock itself: typing a meal in
-  // and having Add do nothing at all.
-  if (name === "today") renderLock();
+  renderActive();
 }
 
-for (const b of document.querySelectorAll<HTMLButtonElement>("nav button")) {
+for (const b of document.querySelectorAll<HTMLButtonElement>("nav button[data-screen]")) {
   b.addEventListener("click", () => show(b.dataset["screen"] as Screen));
 }
 
+onChange(renderActive);
+
+/** Set when GitHub rejects the PAT (401/403), so an expired token surfaces
+ *  clearly on #sync instead of sitting quietly as "1 pending" forever. */
+let syncAuthError = false;
+
 function syncStatus(): void {
+  const el = $("sync");
   const n = pendingWrites();
-  $("sync").textContent = n ? `${n} pending` : "";
+  el.classList.toggle("err", syncAuthError);
+  if (syncAuthError) {
+    el.textContent = n ? `Token error · ${n} pending` : "Token error";
+    el.title = "GitHub rejected your token — tap to update it in Settings";
+  } else if (n) {
+    el.textContent = `${n} pending`;
+    el.title = "Tap to retry sync";
+  } else {
+    el.textContent = "";
+    el.title = "";
+  }
 }
 
 async function sync(): Promise<void> {
+  const hadPending = pendingWrites() > 0;
   try {
     await flush();
-  } catch {
+    if (hadPending) syncAuthError = false;
+  } catch (err) {
+    syncAuthError = isAuthError(err);
     // Stays queued.
   }
   syncStatus();
 }
 
+$("sync").addEventListener("click", () => {
+  if (syncAuthError) {
+    show("settings");
+    const conn = $("c-pat").closest("details");
+    if (conn) conn.open = true;
+    $("c-pat").focus();
+    msg(
+      "settings-msg",
+      "GitHub rejected your token (expired or missing repo access). Update it and save.",
+      "err",
+    );
+    return;
+  }
+  if (pendingWrites() > 0) void sync();
+});
+
 /**
- * Every change to the day on screen goes through here. Write, redraw, push — in
- * that order, and the push last because it is the only step allowed to fail.
+ * Every change to the day on screen goes through here. updateDay() writes to
+ * cache and triggers onChange -> renderActive(), then sync() pushes to GitHub
+ * (the only step allowed to fail).
  */
 async function commit(fn: (d: Day) => void): Promise<void> {
   // The controls are disabled as well, so this is the backstop rather than the
@@ -173,8 +222,24 @@ async function commit(fn: (d: Day) => void): Promise<void> {
   // the funnel every write already goes through, and not of eight handlers.
   if (locked()) return;
   await updateDay(day, fn);
-  await render();
+  await recordGoalIfNeeded();
   await sync();
+}
+
+/** Pulls any unfetched months needed for `forDay` and today's rolling week. */
+async function pullHistory(forDay: DayKey): Promise<void> {
+  const cfg = cachedConfig();
+  const today = todayKey();
+  const tasks: Promise<void>[] = [ensureRange(addDays(today, -(WEEK_DAYS - 1)), today)];
+  if (cfg) {
+    tasks.push(ensureRange(addDays(forDay, -cfg.estimator.historyDays), forDay));
+    if (forDay !== today) {
+      tasks.push(ensureRange(addDays(today, -cfg.estimator.historyDays), today));
+    }
+  } else {
+    tasks.push(ensureRange(forDay, forDay));
+  }
+  await Promise.all(tasks);
 }
 
 // ------------------------------------------------------------------- setup
@@ -210,7 +275,7 @@ $("prev-day").addEventListener("click", () => goTo(addDays(day, -1)));
  * and anything beyond it is a calendar nobody asked for.
  */
 $("next-day").addEventListener("click", () => {
-  if (day === addDays(todayKey(), 1)) return;
+  if (day >= addDays(todayKey(), 1)) return;
   goTo(addDays(day, 1));
 });
 
@@ -224,7 +289,7 @@ $("day-lock").addEventListener("click", () => {
 $("weight-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const kg = num("f-weight");
-  if (!kg) return;
+  if (!Number.isFinite(kg) || kg <= 0) return;
   await commit((d) => {
     d.weight_kg = kg;
   });
@@ -284,12 +349,19 @@ $("f-estimate").addEventListener("click", async () => {
 
 $("food-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const name = desc();
+  if (!name) return msg("food-msg", "Describe the food first.", "err");
+  const kcal = num("f-kcal");
+  const protein = num("f-protein");
+  if (!Number.isFinite(kcal) || kcal < 0 || !Number.isFinite(protein) || protein < 0) {
+    return msg("food-msg", "Enter non-negative numbers for calories and protein.", "err");
+  }
   const item: FoodItem = {
     id: crypto.randomUUID(),
     at: nowStamp(),
-    name: desc(),
-    kcal: num("f-kcal"),
-    protein_g: num("f-protein"),
+    name,
+    kcal,
+    protein_g: protein,
     ...(estimatedBy ? { model: estimatedBy } : {}),
     ...(estimatedBy && estimatedSd !== null ? { kcal_sd: estimatedSd } : {}),
   };
@@ -326,41 +398,41 @@ function renderLock(): void {
   $<HTMLFieldSetElement>("day-edit").disabled = locked();
 }
 
-/** Detached from render(), so a failure here cannot surface as an unhandled rejection. */
-async function planReminders(cfg: Config | null, d: Day, src: Source): Promise<void> {
+/** Detached from renderToday(), so a failure here cannot surface as an unhandled rejection. */
+async function planReminders(cfg: Config | null, todayData: Day): Promise<void> {
   try {
-    await updatePlan(cfg, day === todayKey() ? d : await readDay(todayKey(), src));
+    await updatePlan(cfg, todayData);
   } catch {
     // Reminders are best effort by design; see the note under Settings.
   }
 }
 
-async function render(src: Source = "server"): Promise<void> {
-  const cfg = cachedConfig();
+/** Last (revision, viewDay, today) painted into Today's DOM. */
+let todayRev = -1;
+let todayViewDay: DayKey | "" = "";
+let todayNow: DayKey | "" = "";
 
-  // Started before the first await so that the month holding the day on screen
-  // and the months behind the estimator window go out together. readMonth
-  // collapses the overlap between the two into one request.
-  const history = cfg ? readRange(addDays(day, -cfg.estimator.historyDays), day, src) : null;
-
-  // Always about now, whichever day is on screen — so it cannot read from the
-  // history above, which ends at `day` and would be missing the last few days
-  // whenever you have browsed backwards. Its months are almost always already
-  // inside that range, and readMonth collapses the overlap into no new request.
-  const today = todayKey();
-  const week = readRange(addDays(today, -(WEEK_DAYS - 1)), today, src);
-
-  const d = await readDay(day, src);
-  $("day-label").textContent = humanDay(day);
+/**
+ * Purely synchronous over the cache — no awaits means overlapping taps on ‹/›
+ * can never interleave or paint an older day over a newer one.
+ */
+function renderToday(viewDay: DayKey): void {
+  // Always repaint the lock even on a cache hit: leaving Today resets unlocked.
   renderLock();
-  $<HTMLButtonElement>("next-day").disabled = day === addDays(today, 1);
+  const rev = revision();
+  const today = todayKey();
+  if (todayRev === rev && todayViewDay === viewDay && todayNow === today) return;
+
+  const d = cachedDay(viewDay);
+  $("day-label").textContent = humanDay(viewDay);
+  $<HTMLButtonElement>("next-day").disabled = viewDay >= addDays(today, 1);
 
   // Tomorrow is food only, and it says so in place: the weight box and the
   // complete tick are dimmed and disabled rather than hidden, so the layout
   // holds still between today and tomorrow. The tick is what admits a day
   // into the TDEE fit, and a weigh-in for a day that has not happened is a
   // nonsense number — both stay out of reach until the day arrives.
-  const future = day > today;
+  const future = viewDay > today;
   for (const id of ["weight-form", "logging-row", "logging-note"]) {
     $(id).classList.toggle("dimmed", future);
   }
@@ -371,50 +443,48 @@ async function render(src: Source = "server"): Promise<void> {
   $<HTMLInputElement>("f-logging").checked = d.logging === "complete";
   renderItems(d);
 
+  const snap = historyFor(viewDay);
   // Reminders are always about today, whichever day happens to be on screen,
   // and are re-planned here so that saving a weight silences one immediately.
-  // Not awaited: it is a Cache API round trip plus, on an older day, a month
-  // read, and nothing on screen waits on the answer.
-  void planReminders(cfg, d, src);
-  if (!cfg) return;
+  void planReminders(snap?.cfg ?? null, cachedDay(today));
+  if (snap) renderGoals(d, snap.est, snap.cfg, viewDay >= today);
 
-  const past = await history!;
-  const est = estimate(cfg, past, day);
-
-  // Read over the same history and dated to the same day as the weight chart
-  // beside it, so browsing back moves both pictures together rather than one.
-  updateTrendHistory(day, past, cfg);
-
-  // Only ever pinned from a server read. The cache pass exists to put something
-  // on screen fast, and a number derived from a stale month is not one to write
-  // down permanently as what today was judged against.
-  if (est && src === "server") await recordGoal(d, est);
-  renderGoals(d, est, cfg, day >= today);
-  updateTrendWeight(est);
-  renderWeek(await week, est);
+  todayRev = rev;
+  todayViewDay = viewDay;
+  todayNow = today;
 }
 
 /**
- * Pins today's goal the first time the day is opened, and never touches it
- * again. The bias accumulator needs the number that was in force that day;
- * re-deriving it later from more data would fabricate deviations every time
- * the estimate moved.
+ * Pins today's goal the first time an estimate is available for today, and
+ * never touches it again. The bias accumulator needs the number that was in
+ * force that day; re-deriving it later from more data would fabricate
+ * deviations every time the estimate moved.
  *
  * The correction itself stays out of the UI — the band moving is the whole of
  * what the user sees. The log is here so that when it moves, there is somewhere
  * to look and find out why.
  */
-async function recordGoal(d: Day, est: Estimate): Promise<void> {
-  if (day === todayKey() && d.goal_kcal === undefined) {
-    d.goal_kcal = Math.round(est.goalKcal);
-    await updateDay(day, (x) => {
-      x.goal_kcal ??= d.goal_kcal;
+async function recordGoalIfNeeded(log = false): Promise<boolean> {
+  const today = todayKey();
+  const snap = historyFor(today);
+  if (!snap?.est) return false;
+
+  let pinned = false;
+  const d = cachedDay(today);
+  if (d.goal_kcal === undefined) {
+    const goal = Math.round(snap.est.goalKcal);
+    await updateDay(today, (x) => {
+      x.goal_kcal ??= goal;
     });
+    pinned = true;
   }
-  console.info(
-    `bias E=${round(est.bias.kcal)} over ${est.bias.days} d ·` +
-      ` goal ${round(est.goalKcal)} shown as ${round(est.targetKcal)}`,
-  );
+  if (log || pinned) {
+    console.info(
+      `bias E=${round(snap.est.bias.kcal)} over ${snap.est.bias.days} d ·` +
+        ` goal ${round(snap.est.goalKcal)} shown as ${round(snap.est.targetKcal)}`,
+    );
+  }
+  return pinned;
 }
 
 /**
@@ -517,7 +587,7 @@ function renderItems(d: Day): void {
 // -------------------------------------------------------------------- start
 
 initLifts({ show, sync });
-initSettings({ sync, render });
+initSettings({ sync });
 
 addEventListener("online", () => void sync());
 
@@ -527,9 +597,21 @@ addEventListener("online", () => void sync());
  * on a phone every extra request is a visible delay.
  */
 async function refresh(): Promise<void> {
-  invalidateMonths(monthOf(day), monthOf(todayKey()));
+  const now = todayKey();
+  const prevToday = lastToday;
+  if (now !== prevToday) {
+    lastToday = now;
+    if (day === prevToday) {
+      day = now;
+      unlocked = false;
+      renderActive();
+    }
+  }
+  invalidateMonths(monthOf(day), monthOf(now), monthOf(prevToday));
   await sync();
-  await render();
+  await pullHistory(day);
+  if (await recordGoalIfNeeded(true)) await sync();
+  renderActive();
 }
 
 addEventListener("visibilitychange", () => {

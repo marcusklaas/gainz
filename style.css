@@ -71,7 +71,7 @@ nav {
 /* Equal shares of the width, so the targets are uniform and the one you want is
    always in the same place. Borderless: four bordered boxes edge to edge read as
    a toolbar rather than a bar you are somewhere in. */
-nav button {
+nav button[data-screen] {
   flex: 1;
   min-width: 0;
   padding: .7rem .25rem;
@@ -83,7 +83,7 @@ nav button {
 /* The filled row is the marker at both sizes — it is the same rule, not two
    that happen to match. Colour alone is a weak thing to have to find, and a
    4 px radius is what every other box in the app is drawn with. */
-nav button[aria-current="true"] {
+nav button[data-screen][aria-current="true"] {
   color: var(--fg);
   border-color: var(--fg);
   background: #1f2229;
@@ -104,6 +104,9 @@ nav button[aria-current="true"] {
   border: 1px solid var(--line);
   border-radius: 3px;
 }
+#sync:hover { color: var(--fg); }
+#sync.err { color: var(--warn); border-color: var(--warn); }
+#sync.err:hover { color: var(--warn); }
 #sync:empty { display: none; }
 
 #today header {
@@ -715,7 +718,7 @@ li button { border: 0; background: none; padding: 0 .25rem; }
   /* Read as a list, so: left-aligned, and at the size of the text it sits
      beside. The fill marking the current one is inherited from the bar — only
      the shape of the row changes here, not what being on it looks like. */
-  nav button {
+  nav button[data-screen] {
     padding: .45rem .6rem;
     text-align: left;
     font-size: 1rem;
@@ -727,6 +730,7 @@ li button { border: 0; background: none; padding: 0 .25rem; }
     padding: 0;
     border: 0;
     background: none;
+    text-align: left;
   }
 
   /* All in the one cell, at the one width — the same --col the body is capped

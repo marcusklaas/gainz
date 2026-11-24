@@ -19,6 +19,28 @@ export interface Missing {
   kind: "missing";
 }
 
+export class HttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly auth: boolean,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** True when GitHub rejected the token itself (expired, revoked, or lacking
+ *  repo access) rather than a transient network fault or rate limit. */
+export function isAuthError(err: unknown): boolean {
+  return err instanceof HttpError && err.auth;
+}
+
+async function httpError(res: Response, label: string): Promise<HttpError> {
+  const rateLimited = res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0";
+  const auth = res.status === 401 || (res.status === 403 && !rateLimited);
+  return new HttpError(res.status, auth, `${label}: ${res.status} ${await res.text()}`);
+}
+
 function toBase64(s: string): string {
   const bytes = new TextEncoder().encode(s);
   let bin = "";
@@ -60,7 +82,7 @@ export async function getFile(
   });
   if (res.status === 304) return { kind: "unchanged" };
   if (res.status === 404) return { kind: "missing" };
-  if (!res.ok) throw new Error(`GET ${path}: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw await httpError(res, `GET ${path}`);
   const body = (await res.json()) as { content: string; sha: string };
   return { kind: "file", text: fromBase64(body.content), sha: body.sha, etag: res.headers.get("etag") };
 }
@@ -83,13 +105,7 @@ export async function putFile(
       ...(sha ? { sha } : {}),
     }),
   });
-  if (!res.ok) {
-    const err = new Error(`PUT ${path}: ${res.status} ${await res.text()}`) as Error & {
-      status: number;
-    };
-    err.status = res.status;
-    throw err;
-  }
+  if (!res.ok) throw await httpError(res, `PUT ${path}`);
   const body = (await res.json()) as { content: { sha: string } };
   return body.content.sha;
 }
@@ -100,5 +116,5 @@ export async function checkAccess(s: Settings): Promise<void> {
     headers: headers(s),
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`Cannot reach ${s.repo}: ${res.status}`);
+  if (!res.ok) throw new HttpError(res.status, res.status === 401 || res.status === 403, `Cannot reach ${s.repo}: ${res.status}`);
 }

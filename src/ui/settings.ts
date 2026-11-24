@@ -5,9 +5,9 @@ import { todayKey } from "../core/dates.js";
 import { $, checked, flash, msg, num, val, type Screen } from "./dom.js";
 import { buildContext, contextFrom } from "../core/export.js";
 import { checkAccess } from "../services/github.js";
-import { requestReminders } from "../services/notify.js";
+import { requestReminders, updatePlan } from "../services/notify.js";
 import { loadSettings, parseRepo, repoUrl, saveSettings, type Settings } from "../services/settings.js";
-import { cachedConfig, readRange, saveConfig } from "../services/store.js";
+import { cachedConfig, cachedDay, readRange, saveConfig } from "../services/store.js";
 import type { Config } from "../core/types.js";
 
 /** The folded settings, which is not every folded section on the screen. The
@@ -180,7 +180,7 @@ async function buildExport(): Promise<void> {
   for (const b of exportButtons()) b.disabled = false;
 }
 
-export function initSettings(deps: { sync: () => Promise<void>; render: () => Promise<void> }): void {
+export function initSettings(deps: { sync: () => Promise<void> }): void {
   buildTips();
 
   // Runs after the tip's own handler, which is why an open one survives its own
@@ -226,9 +226,10 @@ export function initSettings(deps: { sync: () => Promise<void>; render: () => Pr
 
     // Permission is asked for here rather than on the toggle: this is the point
     // where the times are settled, and a prompt that appears mid-edit gets
-    // dismissed. render() below re-plans against whatever the answer was.
+    // dismissed. Re-plan reminders right away against whatever the answer was.
     const wanted = c.notifications.weight.enabled || c.notifications.nutrition.enabled;
     if (wanted) $("notify-note").textContent = await requestReminders();
+    void updatePlan(c, cachedDay(todayKey())).catch(() => {});
 
     // Only worth a round trip when they actually changed — otherwise every edit
     // to a number would need the network to succeed, and saving offline is a
@@ -246,8 +247,9 @@ export function initSettings(deps: { sync: () => Promise<void>; render: () => Pr
       saveSettings(s);
     }
 
+    // saveConfig() already bumped store.revision(), so Today, Lifts, and Trend
+    // automatically pick up the new config the next time each is shown.
     await deps.sync();
-    await deps.render();
     $("config-banner").hidden = true;
     flash("settings-msg", "Saved.");
   });

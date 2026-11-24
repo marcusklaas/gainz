@@ -1,10 +1,25 @@
-// Three-way day merges. Pure over Day records, so every conflict case can be
-// checked directly without mocking GitHub or localStorage.
+// Three-way day merges, outbox / sync concurrency guarantees, GitHub auth error
+// detection, store revision / subscription, and memoized derived history.
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 
-import { mergeDay } from "../src/services/store.js";
-import type { Day, FoodItem, Session } from "../src/core/types.js";
+import { defaultConfig } from "../src/core/config.js";
+import { historyFor } from "../src/services/derived.js";
+import { getFile, isAuthError } from "../src/services/github.js";
+import { saveSettings } from "../src/services/settings.js";
+import {
+  flush,
+  invalidateMonths,
+  mergeDay,
+  onChange,
+  pendingWrites,
+  readDay,
+  readMonth,
+  revision,
+  saveConfig,
+  updateDay,
+} from "../src/services/store.js";
+import type { Day, FoodItem, MonthFile, Session } from "../src/core/types.js";
 
 const item = (id: string, at: string, kcal = 500): FoodItem => ({
   id,
@@ -121,5 +136,312 @@ describe("mergeDay", () => {
     const merged = mergeDay(undefined, { weight_kg: 79.5, items: [a] }, undefined);
     assert.equal(merged.weight_kg, 79.5);
     assert.deepEqual(merged.items, [a]);
+  });
+});
+
+// ---------------------------------------------------------------- outbox / sync
+
+function memoryStorage(): Storage {
+  const map = new Map<string, string>();
+  return {
+    get length() {
+      return map.size;
+    },
+    clear: () => map.clear(),
+    getItem: (k: string) => map.get(k) ?? null,
+    key: (i: number) => [...map.keys()][i] ?? null,
+    removeItem: (k: string) => {
+      map.delete(k);
+    },
+    setItem: (k: string, v: string) => {
+      map.set(k, v);
+    },
+  };
+}
+
+function deferred<T = void>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+function b64(s: string): string {
+  return Buffer.from(s, "utf8").toString("base64");
+}
+
+function fromB64(s: string): string {
+  return Buffer.from(s, "base64").toString("utf8");
+}
+
+describe("store sync races", () => {
+  const origStorage = globalThis.localStorage;
+  const origFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    Object.defineProperty(globalThis, "localStorage", {
+      value: memoryStorage(),
+      configurable: true,
+      writable: true,
+    });
+    saveSettings({
+      repo: "u/r",
+      branch: "main",
+      pat: "tok",
+      anthropicKey: "",
+      openaiKey: "",
+    });
+    invalidateMonths("2026-08", "2026-09", "2026-10", "2026-11", "2026-12");
+  });
+
+  afterEach(() => {
+    Object.defineProperty(globalThis, "localStorage", {
+      value: origStorage,
+      configurable: true,
+      writable: true,
+    });
+    globalThis.fetch = origFetch;
+  });
+
+  it("keeps and re-flushes edits that arrive while a PUT is in flight", async () => {
+    const server = new Map<string, { text: string; sha: string }>();
+    const putGate = deferred();
+    const putStarted = deferred();
+    let putCount = 0;
+
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname.split("/contents/")[1]!;
+      if (init?.method === "PUT") {
+        putCount++;
+        const body = JSON.parse(String(init.body)) as { content: string };
+        if (putCount === 1) {
+          putStarted.resolve();
+          await putGate.promise;
+        }
+        const sha = `sha-${putCount}`;
+        server.set(path, { text: fromB64(body.content), sha });
+        return new Response(JSON.stringify({ content: { sha } }), { status: 200 });
+      }
+      const existing = server.get(path);
+      if (!existing) return new Response("not found", { status: 404 });
+      return new Response(JSON.stringify({ content: b64(existing.text), sha: existing.sha }), {
+        status: 200,
+      });
+    }) as typeof fetch;
+
+    const a = item("a", "2026-08-10T08:00:00.000Z");
+    const b = item("b", "2026-08-10T09:00:00.000Z");
+    await updateDay("2026-08-10", (d) => d.items.push(a));
+
+    const flushing = flush();
+    await putStarted.promise;
+
+    // A second edit lands while the first PUT is still awaiting GitHub.
+    await updateDay("2026-08-10", (d) => d.items.push(b));
+    putGate.resolve();
+    await flushing;
+
+    assert.equal(pendingWrites(), 0);
+    assert.equal(putCount, 2);
+    const saved = JSON.parse(server.get("data/2026/2026-08.json")!.text) as MonthFile;
+    assert.deepEqual(
+      saved.days["2026-08-10"]!.items.map((x) => x.id),
+      ["a", "b"],
+    );
+  });
+
+  it("coalesces concurrent flush() calls into a single in-flight drain", async () => {
+    const putGate = deferred();
+    const putStarted = deferred();
+    let getCount = 0;
+    let putCount = 0;
+
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        putCount++;
+        putStarted.resolve();
+        await putGate.promise;
+        return new Response(JSON.stringify({ content: { sha: "sha-1" } }), { status: 200 });
+      }
+      getCount++;
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    await updateDay("2026-09-01", (d) => {
+      d.weight_kg = 80;
+    });
+    // updateDay performed one GET (404) to initialize the month.
+    getCount = 0;
+
+    const p1 = flush();
+    await putStarted.promise;
+    const p2 = flush();
+    const p3 = flush();
+    putGate.resolve();
+    await Promise.all([p1, p2, p3]);
+
+    assert.equal(getCount, 1);
+    assert.equal(putCount, 1);
+    assert.equal(pendingWrites(), 0);
+  });
+
+  it("does not clobber dirty local edits on a server readMonth", async () => {
+    const remoteMonth: MonthFile = { version: 1, days: { "2026-10-05": { weight_kg: 79, items: [] } } };
+    let gets = 0;
+
+    globalThis.fetch = (async () => {
+      gets++;
+      return new Response(JSON.stringify({ content: b64(JSON.stringify(remoteMonth)), sha: "s1" }), {
+        status: 200,
+      });
+    }) as typeof fetch;
+
+    // Seed remote, then edit locally (making the month dirty).
+    await readMonth("2026-10", "server");
+    await updateDay("2026-10-05", (d) => {
+      d.weight_kg = 81.2;
+    });
+
+    // Simulate a refocus invalidation while the outbox still has unsynced edits.
+    invalidateMonths("2026-10");
+    gets = 0;
+    const day = await readDay("2026-10-05", "server");
+
+    assert.equal(gets, 0);
+    assert.equal(day.weight_kg, 81.2);
+    assert.equal(pendingWrites(), 1);
+  });
+
+  it("preserves both mutations when two updateDay calls run concurrently", async () => {
+    globalThis.fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+
+    await readMonth("2026-11", "server");
+    const a = item("a", "2026-11-01T08:00:00.000Z");
+    const b = item("b", "2026-11-01T09:00:00.000Z");
+
+    await Promise.all([
+      updateDay("2026-11-01", (d) => d.items.push(a)),
+      updateDay("2026-11-01", (d) => d.items.push(b)),
+    ]);
+
+    const day = await readDay("2026-11-01", "cache");
+    assert.deepEqual(
+      day.items.map((x) => x.id),
+      ["a", "b"],
+    );
+  });
+
+  it("classifies 401 and permission 403 as auth errors, but not 403 rate limits or 500s", async () => {
+    const s = { repo: "u/r", branch: "main", pat: "tok", anthropicKey: "", openaiKey: "" };
+    const cases: [number, Record<string, string>, boolean][] = [
+      [401, {}, true],
+      [403, { "x-ratelimit-remaining": "4999" }, true],
+      [403, { "x-ratelimit-remaining": "0" }, false],
+      [500, {}, false],
+    ];
+    for (const [status, headers, expected] of cases) {
+      globalThis.fetch = (async () => new Response("err", { status, headers })) as typeof fetch;
+      await assert.rejects(
+        () => getFile(s, "config.json"),
+        (err) => {
+          assert.equal(isAuthError(err), expected, `status=${status} headers=${JSON.stringify(headers)}`);
+          return true;
+        },
+      );
+    }
+  });
+
+  it("bumps revision on real writes only and coalesces onChange notifications per tick", async () => {
+    const remoteMonth: MonthFile = { version: 1, days: { "2026-12-01": { weight_kg: 80, items: [] } } };
+    let etagMatched = false;
+
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      if (headers.get("If-None-Match") === '"e1"') {
+        etagMatched = true;
+        return new Response(null, { status: 304 });
+      }
+      return new Response(JSON.stringify({ content: b64(JSON.stringify(remoteMonth)), sha: "s1" }), {
+        status: 200,
+        headers: { etag: '"e1"' },
+      });
+    }) as typeof fetch;
+
+    let calls = 0;
+    const unsub = onChange(() => calls++);
+
+    const r0 = revision();
+    await readMonth("2026-12", "server");
+    const r1 = revision();
+    assert.equal(r1, r0 + 1);
+
+    // 304 unchanged must NOT bump revision or notify.
+    invalidateMonths("2026-12");
+    await readMonth("2026-12", "server");
+    assert.equal(etagMatched, true);
+    assert.equal(revision(), r1);
+
+    // Let the first microtask drain before testing coalescing.
+    await Promise.resolve();
+    calls = 0;
+
+    // Two synchronous config changes in the same tick coalesce into one notification.
+    const cfg = defaultConfig();
+    saveConfig(cfg);
+    saveConfig({ ...cfg, goal: { ...cfg.goal, kcalOffset: -300 } });
+    // Re-saving the exact same config does not bump revision again.
+    const rAfterTwo = revision();
+    saveConfig({ ...cfg, goal: { ...cfg.goal, kcalOffset: -300 } });
+    assert.equal(revision(), rAfterTwo);
+    assert.equal(calls, 0); // not fired synchronously
+
+    await Promise.resolve();
+    assert.equal(calls, 1);
+
+    // Unsubscribing stops further notifications.
+    unsub();
+    await updateDay("2026-12-01", (d) => {
+      d.weight_kg = 80.5;
+    });
+    await Promise.resolve();
+    assert.equal(calls, 1);
+  });
+
+  it("memoizes historyFor by (revision, viewDay) and recomputes automatically on writes", async () => {
+    globalThis.fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+
+    // No config yet -> null.
+    assert.equal(historyFor("2026-12-10"), null);
+
+    const cfg = defaultConfig();
+    saveConfig(cfg);
+    await updateDay("2026-12-09", (d) => {
+      d.weight_kg = 80;
+    });
+    await updateDay("2026-12-10", (d) => {
+      d.weight_kg = 79.8;
+    });
+
+    const first = historyFor("2026-12-10");
+    const second = historyFor("2026-12-10");
+    assert.ok(first);
+    assert.strictEqual(first, second);
+    assert.equal(first.est?.samples.length, 2);
+
+    // Switching viewDay recomputes without needing a revision bump.
+    const earlier = historyFor("2026-12-09");
+    assert.ok(earlier);
+    assert.notStrictEqual(earlier, first);
+    assert.equal(earlier.est?.samples.length, 1);
+
+    // Writing a new workout or weight bumps revision and invalidates the memo automatically.
+    const beforeWrite = historyFor("2026-12-10")!;
+    await updateDay("2026-12-10", (d) => {
+      d.sessions = [session("s1", "2026-12-10T10:00:00.000Z")];
+    });
+    const afterWrite = historyFor("2026-12-10")!;
+    assert.notStrictEqual(afterWrite, beforeWrite);
+    assert.equal(afterWrite.past.get("2026-12-10")?.sessions?.length, 1);
   });
 });
