@@ -12,6 +12,12 @@
 // Reads pull from the server once per month per session and fall back to the
 // cache when that fails. localStorage is an offline fallback, never the source
 // of truth — treating it as the latter is what let two devices drift apart.
+//
+// Every change to cached data — local edit, config save, server pull, or sync
+// merge — flows through writeCache(), which bumps a monotonic revision counter
+// and notifies subscribers on a coalesced microtask. Screens pull from the
+// cache and key their derived work on revision(), so no write path ever has to
+// remember which other screens depend on what it touched.
 import { withDefaults } from "../core/config.js";
 import { getFile, putFile } from "./github.js";
 import { loadSettings, type Settings } from "./settings.js";
@@ -46,6 +52,36 @@ export function monthPath(m: MonthKey): string {
   return `data/${m.slice(0, 4)}/${m}.json`;
 }
 
+// ------------------------------------------------------------ revision / sub
+
+let rev = 0;
+const listeners = new Set<() => void>();
+let notifyQueued = false;
+
+/** Monotonic version of all cached store data (months + config). */
+export function revision(): number {
+  return rev;
+}
+
+/**
+ * Fires on a coalesced microtask whenever any cached month or config actually
+ * changes — whether from a local write, a server pull, or a sync merge.
+ */
+export function onChange(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function bumpRevision(): void {
+  rev++;
+  if (!listeners.size || notifyQueued) return;
+  notifyQueued = true;
+  queueMicrotask(() => {
+    notifyQueued = false;
+    for (const fn of listeners) fn();
+  });
+}
+
 function settings(): Settings {
   const s = loadSettings();
   if (!s) throw new Error("Not configured");
@@ -63,8 +99,10 @@ function readCache(path: string): string | null {
  * read answer 304 and quietly bless an unsynced local edit as server truth.
  */
 function writeCache(path: string, text: string): void {
+  const changed = readCache(path) !== text;
   localStorage.setItem(CACHE + path, text);
   writeEtag(path, null);
+  if (changed) bumpRevision();
 }
 
 function readBase(path: string): MonthFile | null {
@@ -194,16 +232,46 @@ export async function readDay(day: DayKey, src: Source = "server"): Promise<Day>
   return month.days[day] ?? emptyDay();
 }
 
+/** Synchronous cache read for screen rendering. Never touches the network. */
+export function cachedDay(day: DayKey): Day {
+  return cachedMonth(monthOf(day))?.days[day] ?? emptyDay();
+}
+
+function monthsIn(from: DayKey, to: DayKey): MonthKey[] {
+  const months = new Set<MonthKey>();
+  for (let d = from; d <= to; d = addDays(d, 1)) months.add(monthOf(d));
+  return [...months];
+}
+
+/** Synchronous cache read across [from, to]. Never touches the network. */
+export function cachedRange(from: DayKey, to: DayKey): Map<DayKey, Day> {
+  const out = new Map<DayKey, Day>();
+  for (const m of monthsIn(from, to)) {
+    const file = cachedMonth(m);
+    if (!file) continue;
+    for (const [day, value] of Object.entries(file.days)) {
+      if (day >= from && day <= to) out.set(day, value);
+    }
+  }
+  return out;
+}
+
+/**
+ * Pulls any unfetched, non-dirty months covering [from, to] from the server in
+ * parallel. Any month whose body changed updates the cache, bumps revision(),
+ * and notifies onChange subscribers automatically.
+ */
+export async function ensureRange(from: DayKey, to: DayKey): Promise<void> {
+  await Promise.all(monthsIn(from, to).map((m) => readMonth(m, "server")));
+}
+
 /**
  * Every logged day in [from, to], across however many month files that spans.
  * The months go out together: a 180-day history is seven files, and fetching
  * them one after another is seven round trips of latency stacked end to end.
  */
 export async function readRange(from: DayKey, to: DayKey, src: Source = "server"): Promise<Map<DayKey, Day>> {
-  const months = new Set<MonthKey>();
-  for (let d = from; d <= to; d = addDays(d, 1)) months.add(monthOf(d));
-
-  const files = await Promise.all([...months].map((m) => readMonth(m, src)));
+  const files = await Promise.all(monthsIn(from, to).map((m) => readMonth(m, src)));
 
   const out = new Map<DayKey, Day>();
   for (const file of files) {

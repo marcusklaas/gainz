@@ -1,6 +1,10 @@
 // The Trend screen: rolling 7-day summary, weight trend, strength index/e1RM
 // with exercise picker, and intake vs TDEE.
-import { todayKey } from "../core/dates.js";
+//
+// Pulls its own inputs from the store on show (and on store changes while
+// visible), gated on (store.revision(), viewDay, todayKey()). Nothing outside
+// this module has to remember to push updates to Trend.
+import { addDays, todayKey } from "../core/dates.js";
 import { $, DASH, plural, round } from "./dom.js";
 import {
   calorieSeries,
@@ -24,28 +28,18 @@ import {
   type Fit,
   type Strength,
 } from "../core/lifts.js";
-import { cachedConfig } from "../services/store.js";
-import type { Config, Day, DayKey } from "../core/types.js";
+import { historyFor } from "../services/derived.js";
+import { cachedConfig, cachedRange, revision } from "../services/store.js";
+import type { Day, DayKey } from "../core/types.js";
 
-/** Latest estimate, kept so the chart can be drawn when Trend becomes visible. */
+/** Latest derived inputs for the three uPlot charts. */
 let latest: Estimate | null = null;
-
-/** The same, for the strength index: all three charts on Trend are drawn from
- *  what the last render worked out, whenever the screen is next on show. */
 let latestStrength: Strength | null = null;
-
-/**
- * What the strength picture is built from: every session in the loaded
- * history, the picker-narrowed subset of it, and the one key in that subset
- * when it holds exactly one — which is what switches the chart from the
- * pooled index to that movement's own e1RM.
- */
 let latestSessions: DatedSession[] = [];
 let latestFiltered: DatedSession[] = [];
 let latestSingle: string | null = null;
-
-/** The day the latest history was rendered against, for strength picker redraws. */
 let latestDay: DayKey = todayKey();
+let latestCalories: CaloriePoint[] | null = null;
 
 /**
  * Null is everything: the default, and what All restores. An explicit set the
@@ -55,8 +49,11 @@ let latestDay: DayKey = todayKey();
  */
 let strengthKeys: Set<string> | null = null;
 
-/** The same, for intake vs TDEE: the third chart on Trend. */
-let latestCalories: CaloriePoint[] | null = null;
+/** Last (revision, viewDay, today) painted into Trend's DOM. */
+let renderedRev = -1;
+let renderedDay: DayKey | "" = "";
+let renderedToday: DayKey | "" = "";
+let chartsPainted = false;
 
 /**
  * uPlot is by far the largest thing the app loads and Today never shows it, so
@@ -66,11 +63,12 @@ let latestCalories: CaloriePoint[] | null = null;
 let chartModule: Promise<typeof import("./chart.js")> | null = null;
 
 /**
- * Always draws the newest estimate rather than one captured at call time, so
- * two paints racing across the dynamic import settle on the same picture.
+ * Always draws the newest derived state rather than one captured at call time,
+ * so two paints racing across the dynamic import settle on the same picture.
  */
-export async function paintChart(): Promise<void> {
+async function paintChart(): Promise<void> {
   const { drawCalories, drawE1rm, drawStrength, drawTrend } = await (chartModule ??= import("./chart.js"));
+  if ($("trend").hidden) return;
   // Every view opens on the same stretch of time: the strength window. For
   // strength it is the window the panel fit is computed over; for calories it
   // shares that window by design; and the weight chart now opens on it too —
@@ -98,33 +96,61 @@ export async function paintChart(): Promise<void> {
     drawStrength($("strength-chart"), latestStrength?.index ?? [], windowDays);
   }
   drawCalories($("calorie-chart"), latestCalories ?? [], windowDays);
+  chartsPainted = true;
 }
 
-/** Updates the weight trend headline and cached estimate for the Trend charts. */
-export function updateTrendWeight(est: Estimate | null): void {
-  latest = est;
-  if (!est) {
+/**
+ * Pulls Trend's inputs from the store and redraws if anything changed since the
+ * last paint. Called when Trend becomes visible or when the store changes while
+ * Trend is already on screen.
+ */
+export function renderTrend(viewDay: DayKey): void {
+  const rev = revision();
+  const today = todayKey();
+  if (renderedRev === rev && renderedDay === viewDay && renderedToday === today) {
+    if (!chartsPainted) void paintChart();
+    return;
+  }
+
+  const snap = historyFor(viewDay);
+  latest = snap?.est ?? null;
+  latestDay = viewDay;
+
+  if (!latest) {
     $("trend-note").textContent = "No weigh-ins yet. Save one on Today to get started.";
   } else {
     $("trend-note").textContent =
-      est.kgPerWeek === null
-        ? `${est.samples.length} weigh-in so far — two are needed to draw a chart.`
-        : `${est.trendKg.toFixed(1)} kg · ${est.kgPerWeek >= 0 ? "↑" : "↓"}` +
-          `${Math.abs(est.kgPerWeek).toFixed(2)} kg/wk`;
+      latest.kgPerWeek === null
+        ? `${latest.samples.length} weigh-in so far — two are needed to draw a chart.`
+        : `${latest.trendKg.toFixed(1)} kg · ${latest.kgPerWeek >= 0 ? "↑" : "↓"}` +
+          `${Math.abs(latest.kgPerWeek).toFixed(2)} kg/wk`;
   }
-  if (!$("trend").hidden) void paintChart();
-}
 
-/** Recomputes strength and calorie chart inputs from the loaded history. */
-export function updateTrendHistory(day: DayKey, past: Map<DayKey, Day>, cfg: Config): void {
-  latestDay = day;
-  latestSessions = sessionsOf(past);
-  refreshStrength();
-  renderStrengthPicker(latestSessions);
+  if (snap) {
+    latestSessions = sessionsOf(snap.past);
+    refreshStrength(false);
+    renderStrengthPicker(latestSessions);
+    // The same window as the strength verdict above it, over the same history.
+    latestCalories = calorieSeries(snap.cfg, snap.past, viewDay, snap.cfg.strength.windowDays);
+    renderCalories(latestCalories);
+  } else {
+    latestSessions = [];
+    latestFiltered = [];
+    latestSingle = null;
+    latestStrength = null;
+    latestCalories = null;
+    renderStrength(null, false);
+    renderStrengthPicker([]);
+    renderCalories(null);
+  }
 
-  // The same window as the strength verdict above it, over the same history.
-  latestCalories = calorieSeries(cfg, past, day, cfg.strength.windowDays);
-  renderCalories(latestCalories);
+  renderWeek(cachedRange(addDays(today, -(WEEK_DAYS - 1)), today), latest);
+
+  renderedRev = rev;
+  renderedDay = viewDay;
+  renderedToday = today;
+  chartsPainted = false;
+  void paintChart();
 }
 
 // ---------------------------------------------------------------- strength
@@ -181,14 +207,14 @@ function renderStrength(s: Strength | null, nothingThere = false): void {
 // shape, because panelFit on one series is the same fit.
 
 /** Rebuilds the picture from the current selection, without touching the picker. */
-function refreshStrength(): void {
+function refreshStrength(paint = true): void {
   const cfg = cachedConfig();
   if (!cfg) return;
   latestFiltered = selectExercises(latestSessions, strengthKeys);
   latestSingle = singleKey(latestFiltered);
   latestStrength = strengthOf(latestFiltered, latestDay, cfg.strength.windowDays, cfg.strength.rampHalfLife);
   renderStrength(latestStrength, latestFiltered.length === 0 && latestSessions.length > 0);
-  if (!$("trend").hidden) void paintChart();
+  if (paint && !$("trend").hidden) void paintChart();
 }
 
 /** Every key in the loaded history — what the first untick subtracts from. */
@@ -216,7 +242,7 @@ function toggleStrengthKey(key: string, on: boolean): void {
   refreshStrength();
 }
 
-/** Checks follow state after a chip or "only" tap. Rows rebuild on render()
+/** Checks follow state after a chip or "only" tap. Rows rebuild on renderTrend()
  *  only, never under the cursor. */
 function syncStrengthPicker(): void {
   for (const box of document.querySelectorAll<HTMLInputElement>("#strength-rows input")) {
@@ -292,7 +318,7 @@ function renderCalories(points: CaloriePoint[] | null): void {
  * protein, whose target needs a weight to exist — so the block is never hidden,
  * and on a fresh install it still reports what has been logged and trained.
  */
-export function renderWeek(days: Map<DayKey, Day>, est: Estimate | null): void {
+function renderWeek(days: Map<DayKey, Day>, est: Estimate | null): void {
   const w = weekSummary(days, todayKey(), est?.proteinTarget ?? null);
   const dl = $("week");
   dl.replaceChildren();

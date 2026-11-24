@@ -27,12 +27,11 @@ import {
 } from "../core/lifts.js";
 import {
   cachedConfig,
+  cachedRange,
   clearDraft,
   readDraft,
-  readRange,
   updateDay,
   writeDraft,
-  type Source,
 } from "../services/store.js";
 import type { DayKey, Draft } from "../core/types.js";
 
@@ -40,12 +39,12 @@ import type { DayKey, Draft } from "../core/types.js";
  *  months are already fetched and the screen costs no extra requests. */
 const historyDays = () => cachedConfig()?.estimator.historyDays ?? 180;
 
-/** Sessions in that window, newest first. Re-read whenever one is written. */
+/** Sessions in that window, newest first. Pulled synchronously from cache on render. */
 let sessions: DatedSession[] = [];
 
-async function loadSessions(src: Source = "cache"): Promise<void> {
+function loadSessions(): void {
   const today = todayKey();
-  sessions = sessionsOf(await readRange(addDays(today, -historyDays()), today, src));
+  sessions = sessionsOf(cachedRange(addDays(today, -historyDays()), today));
 }
 
 /**
@@ -84,8 +83,8 @@ function editDraft(fn: (d: Draft) => void): void {
   renderEditor();
 }
 
-export async function renderLifts(): Promise<void> {
-  await loadSessions();
+export function renderLifts(): void {
+  loadSessions();
   draft ??= readDraft();
 
   const names = templateNames(sessions);
@@ -351,11 +350,7 @@ function renderEditor(): void {
   $<HTMLButtonElement>("l-save").disabled = confirmedSets(d) === 0;
 }
 
-export function initLifts(deps: {
-  show: (name: Screen) => void;
-  sync: () => Promise<void>;
-  render: (src?: Source) => Promise<void>;
-}): void {
+export function initLifts(deps: { show: (name: Screen) => void; sync: () => Promise<void> }): void {
   showScreen = deps.show;
 
   $("lift-resume").addEventListener("click", () => enter());
@@ -425,12 +420,10 @@ export function initLifts(deps: {
       clearDraft();
       draft = null;
     }
-    // Leave the editor and refresh Trend immediately from cache before pushing
-    // to GitHub, so tapping Trend right away sees the new session and a slow
-    // network never stalls navigation.
+    // updateDay() already bumped store.revision(), so Lifts and Trend both pull
+    // fresh data automatically with no cross-screen plumbing.
     deps.show("lifts");
     flash("lifts-msg", "Session saved.");
-    await deps.render("cache");
     await deps.sync();
   });
 
@@ -455,7 +448,6 @@ export function initLifts(deps: {
     });
     deps.show("lifts");
     flash("lifts-msg", "Session deleted.");
-    await deps.render("cache");
     await deps.sync();
   });
 }

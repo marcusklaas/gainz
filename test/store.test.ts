@@ -1,16 +1,22 @@
-// Three-way day merges, outbox / sync concurrency guarantees, and GitHub auth error detection.
+// Three-way day merges, outbox / sync concurrency guarantees, GitHub auth error
+// detection, store revision / subscription, and memoized derived history.
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
+import { defaultConfig } from "../src/core/config.js";
+import { historyFor } from "../src/services/derived.js";
 import { getFile, isAuthError } from "../src/services/github.js";
 import { saveSettings } from "../src/services/settings.js";
 import {
   flush,
   invalidateMonths,
   mergeDay,
+  onChange,
   pendingWrites,
   readDay,
   readMonth,
+  revision,
+  saveConfig,
   updateDay,
 } from "../src/services/store.js";
 import type { Day, FoodItem, MonthFile, Session } from "../src/core/types.js";
@@ -186,7 +192,7 @@ describe("store sync races", () => {
       anthropicKey: "",
       openaiKey: "",
     });
-    invalidateMonths("2026-08", "2026-09", "2026-10", "2026-11");
+    invalidateMonths("2026-08", "2026-09", "2026-10", "2026-11", "2026-12");
   });
 
   afterEach(() => {
@@ -344,5 +350,98 @@ describe("store sync races", () => {
         },
       );
     }
+  });
+
+  it("bumps revision on real writes only and coalesces onChange notifications per tick", async () => {
+    const remoteMonth: MonthFile = { version: 1, days: { "2026-12-01": { weight_kg: 80, items: [] } } };
+    let etagMatched = false;
+
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      if (headers.get("If-None-Match") === '"e1"') {
+        etagMatched = true;
+        return new Response(null, { status: 304 });
+      }
+      return new Response(JSON.stringify({ content: b64(JSON.stringify(remoteMonth)), sha: "s1" }), {
+        status: 200,
+        headers: { etag: '"e1"' },
+      });
+    }) as typeof fetch;
+
+    let calls = 0;
+    const unsub = onChange(() => calls++);
+
+    const r0 = revision();
+    await readMonth("2026-12", "server");
+    const r1 = revision();
+    assert.equal(r1, r0 + 1);
+
+    // 304 unchanged must NOT bump revision or notify.
+    invalidateMonths("2026-12");
+    await readMonth("2026-12", "server");
+    assert.equal(etagMatched, true);
+    assert.equal(revision(), r1);
+
+    // Let the first microtask drain before testing coalescing.
+    await Promise.resolve();
+    calls = 0;
+
+    // Two synchronous config changes in the same tick coalesce into one notification.
+    const cfg = defaultConfig();
+    saveConfig(cfg);
+    saveConfig({ ...cfg, goal: { ...cfg.goal, kcalOffset: -300 } });
+    // Re-saving the exact same config does not bump revision again.
+    const rAfterTwo = revision();
+    saveConfig({ ...cfg, goal: { ...cfg.goal, kcalOffset: -300 } });
+    assert.equal(revision(), rAfterTwo);
+    assert.equal(calls, 0); // not fired synchronously
+
+    await Promise.resolve();
+    assert.equal(calls, 1);
+
+    // Unsubscribing stops further notifications.
+    unsub();
+    await updateDay("2026-12-01", (d) => {
+      d.weight_kg = 80.5;
+    });
+    await Promise.resolve();
+    assert.equal(calls, 1);
+  });
+
+  it("memoizes historyFor by (revision, viewDay) and recomputes automatically on writes", async () => {
+    globalThis.fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+
+    // No config yet -> null.
+    assert.equal(historyFor("2026-12-10"), null);
+
+    const cfg = defaultConfig();
+    saveConfig(cfg);
+    await updateDay("2026-12-09", (d) => {
+      d.weight_kg = 80;
+    });
+    await updateDay("2026-12-10", (d) => {
+      d.weight_kg = 79.8;
+    });
+
+    const first = historyFor("2026-12-10");
+    const second = historyFor("2026-12-10");
+    assert.ok(first);
+    assert.strictEqual(first, second);
+    assert.equal(first.est?.samples.length, 2);
+
+    // Switching viewDay recomputes without needing a revision bump.
+    const earlier = historyFor("2026-12-09");
+    assert.ok(earlier);
+    assert.notStrictEqual(earlier, first);
+    assert.equal(earlier.est?.samples.length, 1);
+
+    // Writing a new workout or weight bumps revision and invalidates the memo automatically.
+    const beforeWrite = historyFor("2026-12-10")!;
+    await updateDay("2026-12-10", (d) => {
+      d.sessions = [session("s1", "2026-12-10T10:00:00.000Z")];
+    });
+    const afterWrite = historyFor("2026-12-10")!;
+    assert.notStrictEqual(afterWrite, beforeWrite);
+    assert.equal(afterWrite.past.get("2026-12-10")?.sessions?.length, 1);
   });
 });
