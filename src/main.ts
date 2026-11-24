@@ -11,7 +11,7 @@ import {
   WEEK_DAYS,
   type Estimate,
 } from "./core/estimate.js";
-import { checkAccess } from "./services/github.js";
+import { checkAccess, isAuthError } from "./services/github.js";
 import { clearEdit, initLifts, renderLifts } from "./ui/lifts.js";
 import { estimateFood } from "./services/llm.js";
 import { updatePlan } from "./services/notify.js";
@@ -103,8 +103,10 @@ async function boot(): Promise<void> {
   try {
     await flush();
     const cfg = await refreshConfig();
+    syncAuthError = false;
     if (!cfg) needsConfig(show);
-  } catch {
+  } catch (err) {
+    if (isAuthError(err)) syncAuthError = true;
     // Offline is fine; cached data still renders and writes stay queued.
   }
   fillSettingsForms();
@@ -129,7 +131,7 @@ function show(name: Screen): void {
   // The editor is part of Lifts as far as the nav is concerned; nothing else
   // would be lit while it is open.
   const tab = name === "lift" ? "lifts" : name;
-  for (const b of document.querySelectorAll<HTMLButtonElement>("nav button")) {
+  for (const b of document.querySelectorAll<HTMLButtonElement>("nav button[data-screen]")) {
     b.setAttribute("aria-current", String(b.dataset["screen"] === tab));
   }
   // uPlot sizes from the container, which measures zero while hidden, so the
@@ -145,23 +147,57 @@ function show(name: Screen): void {
   if (name === "today") renderLock();
 }
 
-for (const b of document.querySelectorAll<HTMLButtonElement>("nav button")) {
+for (const b of document.querySelectorAll<HTMLButtonElement>("nav button[data-screen]")) {
   b.addEventListener("click", () => show(b.dataset["screen"] as Screen));
 }
 
+/** Set when GitHub rejects the PAT (401/403), so an expired token surfaces
+ *  clearly on #sync instead of sitting quietly as "1 pending" forever. */
+let syncAuthError = false;
+
 function syncStatus(): void {
+  const el = $("sync");
   const n = pendingWrites();
-  $("sync").textContent = n ? `${n} pending` : "";
+  el.classList.toggle("err", syncAuthError);
+  if (syncAuthError) {
+    el.textContent = n ? `Token error · ${n} pending` : "Token error";
+    el.title = "GitHub rejected your token — tap to update it in Settings";
+  } else if (n) {
+    el.textContent = `${n} pending`;
+    el.title = "Tap to retry sync";
+  } else {
+    el.textContent = "";
+    el.title = "";
+  }
 }
 
 async function sync(): Promise<void> {
+  const hadPending = pendingWrites() > 0;
   try {
     await flush();
-  } catch {
+    if (hadPending) syncAuthError = false;
+  } catch (err) {
+    syncAuthError = isAuthError(err);
     // Stays queued.
   }
   syncStatus();
 }
+
+$("sync").addEventListener("click", () => {
+  if (syncAuthError) {
+    show("settings");
+    const conn = $("c-pat").closest("details");
+    if (conn) conn.open = true;
+    $("c-pat").focus();
+    msg(
+      "settings-msg",
+      "GitHub rejected your token (expired or missing repo access). Update it and save.",
+      "err",
+    );
+    return;
+  }
+  if (pendingWrites() > 0) void sync();
+});
 
 /**
  * Every change to the day on screen goes through here. Write, redraw, push — in
