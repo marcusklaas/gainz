@@ -1,7 +1,8 @@
-// Three-way day merges and outbox / sync concurrency guarantees.
+// Three-way day merges, outbox / sync concurrency guarantees, and GitHub auth error detection.
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
+import { getFile, isAuthError } from "../src/services/github.js";
 import { saveSettings } from "../src/services/settings.js";
 import {
   flush,
@@ -323,5 +324,25 @@ describe("store sync races", () => {
       day.items.map((x) => x.id),
       ["a", "b"],
     );
+  });
+
+  it("classifies 401 and permission 403 as auth errors, but not 403 rate limits or 500s", async () => {
+    const s = { repo: "u/r", branch: "main", pat: "tok", anthropicKey: "", openaiKey: "" };
+    const cases: [number, Record<string, string>, boolean][] = [
+      [401, {}, true],
+      [403, { "x-ratelimit-remaining": "4999" }, true],
+      [403, { "x-ratelimit-remaining": "0" }, false],
+      [500, {}, false],
+    ];
+    for (const [status, headers, expected] of cases) {
+      globalThis.fetch = (async () => new Response("err", { status, headers })) as typeof fetch;
+      await assert.rejects(
+        () => getFile(s, "config.json"),
+        (err) => {
+          assert.equal(isAuthError(err), expected, `status=${status} headers=${JSON.stringify(headers)}`);
+          return true;
+        },
+      );
+    }
   });
 });

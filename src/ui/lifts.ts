@@ -230,7 +230,7 @@ function renderEditor(): void {
       const number = (value: number, step: string, unit: string, apply: (n: number) => void) => {
         const i = document.createElement("input");
         i.type = "number";
-        i.inputMode = "decimal";
+        i.inputMode = unit === "kg" ? "decimal" : "numeric";
         i.min = "0";
         i.step = step;
         i.className = unit;
@@ -245,7 +245,9 @@ function renderEditor(): void {
         // its own edit.
         i.addEventListener("change", () =>
           editDraft((x) => {
-            apply(Number(i.value));
+            const raw = Number(i.value);
+            const clean = Number.isFinite(raw) && raw > 0 ? (unit === "reps" ? Math.round(raw) : raw) : 0;
+            apply(clean);
             set.done = set.reps > 0;
             if (unit === "kg" && set.done) propagateWeight(x.exercises[ei]!, si, set.weight_kg);
           }),

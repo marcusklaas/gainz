@@ -17,7 +17,12 @@ import type { Provider } from "../core/types.js";
 const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/responses";
-const MAX_TOKENS = 200;
+const ANTHROPIC_MAX_TOKENS = 200;
+/** Reasoning models on OpenAI's Responses API count thinking tokens against
+ *  max_output_tokens, and non-reasoning models reject the `reasoning` field —
+ *  so giving a larger ceiling lets reasoning models finish while costing zero
+ *  extra tokens on non-reasoning models (which stop once the JSON closes). */
+const OPENAI_MAX_TOKENS = 1600;
 
 export interface Estimated {
   kcal: number;
@@ -98,7 +103,7 @@ async function callAnthropic(text: string, o: Options): Promise<string> {
     },
     body: JSON.stringify({
       model: o.model,
-      max_tokens: MAX_TOKENS,
+      max_tokens: ANTHROPIC_MAX_TOKENS,
       thinking: { type: "disabled" },
       system: PROMPT,
       messages: [{ role: "user", content: text }],
@@ -132,7 +137,7 @@ async function callOpenAI(text: string, o: Options): Promise<string> {
       model: o.model,
       instructions: PROMPT,
       input: text,
-      max_output_tokens: MAX_TOKENS,
+      max_output_tokens: OPENAI_MAX_TOKENS,
       text: {
         format: { type: "json_schema", name: "estimate", strict: true, schema: SCHEMA },
       },
@@ -141,6 +146,8 @@ async function callOpenAI(text: string, o: Options): Promise<string> {
   if (!res.ok) throw await failure(res);
 
   const body = (await res.json()) as {
+    status?: string;
+    incomplete_details?: { reason?: string };
     output_text?: string;
     output?: { content?: { type: string; text?: string }[] }[];
   };
@@ -149,6 +156,9 @@ async function callOpenAI(text: string, o: Options): Promise<string> {
   for (const item of body.output ?? []) {
     const part = item.content?.find((c) => c.type === "output_text");
     if (part?.text) return part.text;
+  }
+  if (body.status === "incomplete" && body.incomplete_details?.reason === "max_output_tokens") {
+    throw new Error("Estimate ran out of output tokens. Try a faster model or rephrasing.");
   }
   throw new Error("Response contained no text");
 }

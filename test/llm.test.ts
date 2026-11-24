@@ -1,8 +1,9 @@
-// LLM nutrition estimate parsing and 90%-interval -> 1-sigma conversion.
+// LLM nutrition estimate parsing, 90%-interval -> 1-sigma conversion, and
+// OpenAI Responses API request/error handling.
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 
-import { parseEstimate } from "../src/services/llm.js";
+import { estimateFood, parseEstimate } from "../src/services/llm.js";
 
 describe("parseEstimate", () => {
   it("rounds kcal, keeps one decimal on protein, and converts the 90% interval to 1-sigma", () => {
@@ -50,5 +51,63 @@ describe("parseEstimate", () => {
     ]) {
       assert.throws(() => parseEstimate(JSON.stringify(payload)), /without usable numbers/);
     }
+  });
+});
+
+describe("estimateFood (OpenAI)", () => {
+  const origFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+  });
+
+  it("gives OpenAI enough max_output_tokens for reasoning models and reads output_text", async () => {
+    let sentBody: Record<string, unknown> = {};
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      sentBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(
+        JSON.stringify({
+          output: [
+            { type: "reasoning" },
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: JSON.stringify({ kcal: 320, protein_g: 24, kcal_low: 270, kcal_high: 370 }),
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const est = await estimateFood("skyrr bowl", {
+      provider: "openai",
+      model: "gpt-5-mini",
+      key: "sk-test",
+    });
+    assert.equal(est.kcal, 320);
+    assert.equal(est.protein_g, 24);
+    assert.ok(Number(sentBody["max_output_tokens"]) >= 1000);
+  });
+
+  it("surfaces an explicit error when OpenAI exhausts max_output_tokens with no text", async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+          output: [{ type: "reasoning" }],
+        }),
+        { status: 200 },
+      )) as typeof fetch;
+
+    await assert.rejects(
+      () => estimateFood("big dinner", { provider: "openai", model: "o4-mini", key: "sk-test" }),
+      /ran out of output tokens/,
+    );
   });
 });

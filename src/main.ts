@@ -173,17 +173,6 @@ function syncStatus(): void {
     el.textContent = "";
     el.title = "";
   }
-  el.classList.toggle("err", syncAuthError);
-  if (syncAuthError) {
-    el.textContent = n ? `Token error · ${n} pending` : "Token error";
-    el.title = "GitHub rejected your token — tap to update it in Settings";
-  } else if (n) {
-    el.textContent = `${n} pending`;
-    el.title = "Tap to retry sync";
-  } else {
-    el.textContent = "";
-    el.title = "";
-  }
 }
 
 async function sync(): Promise<void> {
@@ -191,7 +180,6 @@ async function sync(): Promise<void> {
   try {
     await flush();
     if (hadPending) syncAuthError = false;
-      if (hadPending) syncAuthError = false;
   } catch (err) {
     syncAuthError = isAuthError(err);
     // Stays queued.
@@ -276,7 +264,7 @@ $("day-lock").addEventListener("click", () => {
 $("weight-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const kg = num("f-weight");
-  if (!kg) return;
+  if (!Number.isFinite(kg) || kg <= 0) return;
   await commit((d) => {
     d.weight_kg = kg;
   });
@@ -336,12 +324,19 @@ $("f-estimate").addEventListener("click", async () => {
 
 $("food-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const name = desc();
+  if (!name) return msg("food-msg", "Describe the food first.", "err");
+  const kcal = num("f-kcal");
+  const protein = num("f-protein");
+  if (!Number.isFinite(kcal) || kcal < 0 || !Number.isFinite(protein) || protein < 0) {
+    return msg("food-msg", "Enter non-negative numbers for calories and protein.", "err");
+  }
   const item: FoodItem = {
     id: crypto.randomUUID(),
     at: nowStamp(),
-    name: desc(),
-    kcal: num("f-kcal"),
-    protein_g: num("f-protein"),
+    name,
+    kcal,
+    protein_g: protein,
     ...(estimatedBy ? { model: estimatedBy } : {}),
     ...(estimatedBy && estimatedSd !== null ? { kcal_sd: estimatedSd } : {}),
   };
