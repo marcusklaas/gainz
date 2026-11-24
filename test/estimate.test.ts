@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { defaultConfig, withDefaults } from "../src/config.js";
-import { addDays } from "../src/dates.js";
+import { defaultConfig, withDefaults } from "../src/core/config.js";
+import { addDays } from "../src/core/dates.js";
 import {
   calorieSeries,
   correctedTarget,
@@ -18,8 +18,8 @@ import {
   weekSummary,
   weightSamples,
   type TrendPoint,
-} from "../src/estimate.js";
-import { DAYS_PER_WEEK, KCAL_PER_KG_FAT, type Config, type Day, type DayKey } from "../src/types.js";
+} from "../src/core/estimate.js";
+import { DAYS_PER_WEEK, KCAL_PER_KG_FAT, type Config, type Day, type DayKey } from "../src/core/types.js";
 
 // --------------------------------------------------------------- fixtures
 

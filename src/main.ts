@@ -1,8 +1,8 @@
 // Entry point: boot, screen navigation, sync plumbing, setup, and the Today
 // screen. Lifts, Trend, and Settings/Export live in their own UI modules.
-import { installDatalistFallback } from "./datalist.js";
-import { addDays, humanDay, monthOf, nowStamp, todayKey } from "./dates.js";
-import { $, DASH, msg, num, round, val, type Screen } from "./dom.js";
+import { installDatalistFallback } from "./ui/datalist.js";
+import { addDays, humanDay, monthOf, nowStamp, todayKey } from "./core/dates.js";
+import { $, DASH, msg, num, round, val, type Screen } from "./ui/dom.js";
 import {
   dayKcal,
   dayProtein,
@@ -10,19 +10,19 @@ import {
   estimate,
   WEEK_DAYS,
   type Estimate,
-} from "./estimate.js";
-import { checkAccess } from "./github.js";
-import { clearEdit, initLifts, renderLifts } from "./lifts-ui.js";
-import { estimateFood } from "./llm.js";
-import { updatePlan } from "./notify.js";
+} from "./core/estimate.js";
+import { checkAccess } from "./services/github.js";
+import { clearEdit, initLifts, renderLifts } from "./ui/lifts.js";
+import { estimateFood } from "./services/llm.js";
+import { updatePlan } from "./services/notify.js";
 import {
   isConfigured,
   loadSettings,
   parseRepo,
   saveSettings,
   type Settings,
-} from "./settings.js";
-import { fillSettingsForms, initSettings, needsConfig } from "./settings-ui.js";
+} from "./services/settings.js";
+import { fillSettingsForms, initSettings, needsConfig } from "./ui/settings.js";
 import {
   cachedConfig,
   flush,
@@ -33,9 +33,9 @@ import {
   refreshConfig,
   updateDay,
   type Source,
-} from "./store.js";
-import { paintChart, renderWeek, updateTrendHistory, updateTrendWeight } from "./trend-ui.js";
-import type { Config, Day, DayKey, FoodItem } from "./types.js";
+} from "./services/store.js";
+import { paintChart, renderWeek, updateTrendHistory, updateTrendWeight } from "./ui/trend.js";
+import type { Config, Day, DayKey, FoodItem } from "./core/types.js";
 
 let day = todayKey();
 

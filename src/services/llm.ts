@@ -12,7 +12,7 @@
 // Keys live on the user's own device and go straight to the provider. That is
 // acceptable only under the conditions agreed in PLAN.md: single user, key never
 // committed, and a hard monthly spend cap on the account.
-import type { Provider } from "./types.js";
+import type { Provider } from "../core/types.js";
 
 const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";

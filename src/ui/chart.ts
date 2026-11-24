@@ -5,10 +5,10 @@
 // labels, and touch-capable zoom/pan is a large amount of pointer-event code
 // with real edge cases, and uPlot is purpose-built for exactly this shape of
 // data. It is the only runtime dependency in the project.
-import uPlot from "../vendor/uPlot.esm.js";
-import { parseDay } from "./dates.js";
-import { projection, type CaloriePoint, type Sample, type TrendPoint } from "./estimate.js";
-import type { IndexPoint, LiftPoint } from "./lifts.js";
+import uPlot from "../../vendor/uPlot.esm.js";
+import { parseDay } from "../core/dates.js";
+import { projection, type CaloriePoint, type Sample, type TrendPoint } from "../core/estimate.js";
+import type { IndexPoint, LiftPoint } from "../core/lifts.js";
 
 const DAY_SECONDS = 86_400;
 

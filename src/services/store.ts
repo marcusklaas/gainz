@@ -12,10 +12,10 @@
 // Reads pull from the server once per month per session and fall back to the
 // cache when that fails. localStorage is an offline fallback, never the source
 // of truth — treating it as the latter is what let two devices drift apart.
-import { withDefaults } from "./config.js";
+import { withDefaults } from "../core/config.js";
 import { getFile, putFile } from "./github.js";
 import { loadSettings, type Settings } from "./settings.js";
-import { addDays, byAt, monthOf } from "./dates.js";
+import { addDays, byAt, monthOf } from "../core/dates.js";
 import {
   emptyDay,
   emptyMonth,
@@ -25,7 +25,7 @@ import {
   type Draft,
   type MonthFile,
   type MonthKey,
-} from "./types.js";
+} from "../core/types.js";
 
 const CACHE = "gainz.cache.";
 const OUTBOX = "gainz.outbox";

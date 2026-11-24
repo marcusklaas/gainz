@@ -11,8 +11,8 @@ import {
   fitJoint,
   inputsFor,
   scaleVarKg2,
-} from "../src/joint3.js";
-import type { Day, DayKey } from "../src/types.js";
+} from "../src/core/joint3.js";
+import type { Day, DayKey } from "../src/core/types.js";
 
 const close = (actual: number, expected: number, eps: number, what = "") =>
   assert.ok(

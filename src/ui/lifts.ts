@@ -5,7 +5,7 @@
 // Nothing here writes to the repo until Save. Until then the whole session is a
 // draft in localStorage, which is what makes leaving mid-workout free: there is
 // no unsaved state in memory to warn about, and the list offers to resume.
-import { addDays, atTime, byAt, humanDay, nowStamp, todayKey } from "./dates.js";
+import { addDays, atTime, byAt, humanDay, nowStamp, todayKey } from "../core/dates.js";
 import { $, flash, msg, val, type Screen } from "./dom.js";
 import {
   confirmedSets,
@@ -24,7 +24,7 @@ import {
   summarise,
   templateNames,
   type DatedSession,
-} from "./lifts.js";
+} from "../core/lifts.js";
 import {
   cachedConfig,
   clearDraft,
@@ -33,8 +33,8 @@ import {
   updateDay,
   writeDraft,
   type Source,
-} from "./store.js";
-import type { DayKey, Draft } from "./types.js";
+} from "../services/store.js";
+import type { DayKey, Draft } from "../core/types.js";
 
 /** The window Lifts reads, kept in step with the estimator's own history so the
  *  months are already fetched and the screen costs no extra requests. */

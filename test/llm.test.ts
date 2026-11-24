@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { parseEstimate } from "../src/llm.js";
+import { parseEstimate } from "../src/services/llm.js";
 
 describe("parseEstimate", () => {
   it("rounds kcal, keeps one decimal on protein, and converts the 90% interval to 1-sigma", () => {

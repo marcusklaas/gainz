@@ -3,8 +3,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { mergeDay } from "../src/store.js";
-import type { Day, FoodItem, Session } from "../src/types.js";
+import { mergeDay } from "../src/services/store.js";
+import type { Day, FoodItem, Session } from "../src/core/types.js";
 
 const item = (id: string, at: string, kcal = 500): FoodItem => ({
   id,

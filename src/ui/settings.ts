@@ -1,14 +1,14 @@
 // Settings screen (config + device credentials + inline tooltips) and the
 // Export for AI disclosure nested inside it.
-import { at, defaultConfig, FIELDS, put, withDefaults } from "./config.js";
-import { todayKey } from "./dates.js";
+import { at, defaultConfig, FIELDS, put, withDefaults } from "../core/config.js";
+import { todayKey } from "../core/dates.js";
 import { $, checked, flash, msg, num, val, type Screen } from "./dom.js";
-import { buildContext, contextFrom } from "./export.js";
-import { checkAccess } from "./github.js";
-import { requestReminders } from "./notify.js";
-import { loadSettings, parseRepo, repoUrl, saveSettings, type Settings } from "./settings.js";
-import { cachedConfig, readRange, saveConfig } from "./store.js";
-import type { Config } from "./types.js";
+import { buildContext, contextFrom } from "../core/export.js";
+import { checkAccess } from "../services/github.js";
+import { requestReminders } from "../services/notify.js";
+import { loadSettings, parseRepo, repoUrl, saveSettings, type Settings } from "../services/settings.js";
+import { cachedConfig, readRange, saveConfig } from "../services/store.js";
+import type { Config } from "../core/types.js";
 
 /** The folded settings, which is not every folded section on the screen. The
  *  export sits among them but holds no values to review, and unfolding it would

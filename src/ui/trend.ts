@@ -1,6 +1,6 @@
 // The Trend screen: rolling 7-day summary, weight trend, strength index/e1RM
 // with exercise picker, and intake vs TDEE.
-import { todayKey } from "./dates.js";
+import { todayKey } from "../core/dates.js";
 import { $, DASH, plural, round } from "./dom.js";
 import {
   calorieSeries,
@@ -8,7 +8,7 @@ import {
   weekSummary,
   type CaloriePoint,
   type Estimate,
-} from "./estimate.js";
+} from "../core/estimate.js";
 import {
   e1rmPoints,
   exerciseKey,
@@ -23,9 +23,9 @@ import {
   type DatedSession,
   type Fit,
   type Strength,
-} from "./lifts.js";
-import { cachedConfig } from "./store.js";
-import type { Config, Day, DayKey } from "./types.js";
+} from "../core/lifts.js";
+import { cachedConfig } from "../services/store.js";
+import type { Config, Day, DayKey } from "../core/types.js";
 
 /** Latest estimate, kept so the chart can be drawn when Trend becomes visible. */
 let latest: Estimate | null = null;
