@@ -104,14 +104,16 @@ async function boot(): Promise<void> {
   fillSettingsForms();
   show("today");
 
-  try {
-    await flush();
-    const cfg = await refreshConfig();
-    syncAuthError = false;
-    if (!cfg) needsConfig(show);
-  } catch (err) {
-    if (isAuthError(err)) syncAuthError = true;
-    // Offline is fine; cached data still renders and writes stay queued.
+  await sync();
+  if (!syncAuthError) {
+    try {
+      const cfg = await refreshConfig();
+      syncAuthError = false;
+      if (!cfg) needsConfig(show);
+    } catch (err) {
+      if (isAuthError(err)) syncAuthError = true;
+      // Offline is fine; cached data still renders and writes stay queued.
+    }
   }
   fillSettingsForms();
   await pullHistory(day);
@@ -166,6 +168,44 @@ onChange(renderActive);
 /** Set when GitHub rejects the PAT (401/403), so an expired token surfaces
  *  clearly on #sync instead of sitting quietly as "1 pending" forever. */
 let syncAuthError = false;
+/** Count of active flush() awaits so overlapping sync() calls keep showing
+ *  "Syncing…" until the last one settles. */
+let syncInFlight = 0;
+
+/** Exponential backoff steps (ms) for retrying failed writes while open. */
+const RETRY_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
+let retryAttempt = 0;
+let retryTimer: number | null = null;
+
+function clearRetry(): void {
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+}
+
+function scheduleRetry(): void {
+  clearRetry();
+  if (!pendingWrites() || syncAuthError) return;
+  if (document.visibilityState === "hidden" || navigator.onLine === false) return;
+  const wait = RETRY_MS[Math.min(retryAttempt, RETRY_MS.length - 1)]!;
+  retryAttempt++;
+  retryTimer = window.setTimeout(() => {
+    retryTimer = null;
+    void retrySync();
+  }, wait);
+}
+
+/** Retries pending writes and, once the outbox clears, pulls the current month
+ *  so any edits from other devices that were held back while dirty appear too. */
+async function retrySync(): Promise<void> {
+  if (!pendingWrites() || syncAuthError) return;
+  await sync();
+  if (!pendingWrites()) {
+    invalidateMonths(monthOf(day), monthOf(todayKey()));
+    await pullHistory(day);
+  }
+}
 
 function syncStatus(): void {
   const el = $("sync");
@@ -174,6 +214,9 @@ function syncStatus(): void {
   if (syncAuthError) {
     el.textContent = n ? `Token error · ${n} pending` : "Token error";
     el.title = "GitHub rejected your token — tap to update it in Settings";
+  } else if (syncInFlight > 0 && n) {
+    el.textContent = "Syncing…";
+    el.title = "Uploading changes to GitHub";
   } else if (n) {
     el.textContent = `${n} pending`;
     el.title = "Tap to retry sync";
@@ -184,15 +227,25 @@ function syncStatus(): void {
 }
 
 async function sync(): Promise<void> {
+  clearRetry();
   const hadPending = pendingWrites() > 0;
+  if (hadPending) {
+    syncInFlight++;
+    syncStatus();
+  }
   try {
     await flush();
     if (hadPending) syncAuthError = false;
+    if (!pendingWrites()) retryAttempt = 0;
   } catch (err) {
     syncAuthError = isAuthError(err);
+    if (!syncAuthError) console.warn("sync failed, will retry:", err);
     // Stays queued.
+  } finally {
+    if (hadPending) syncInFlight = Math.max(0, syncInFlight - 1);
   }
   syncStatus();
+  if (pendingWrites() > 0 && !syncAuthError) scheduleRetry();
 }
 
 $("sync").addEventListener("click", () => {
@@ -208,7 +261,10 @@ $("sync").addEventListener("click", () => {
     );
     return;
   }
-  if (pendingWrites() > 0) void sync();
+  if (pendingWrites() > 0 && syncInFlight === 0) {
+    retryAttempt = 0;
+    void retrySync();
+  }
 });
 
 /**
@@ -589,7 +645,10 @@ function renderItems(d: Day): void {
 initLifts({ show, sync });
 initSettings({ sync });
 
-addEventListener("online", () => void sync());
+addEventListener("online", () => {
+  retryAttempt = 0;
+  void retrySync();
+});
 
 /**
  * Returning to the app is when another device's changes should show up. Only
@@ -615,7 +674,12 @@ async function refresh(): Promise<void> {
 }
 
 addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") void refresh();
+  if (document.visibilityState === "visible") {
+    retryAttempt = 0;
+    void refresh();
+  } else {
+    clearRetry();
+  }
 });
 
 // The path is relative, so the worker registers at whatever prefix the app is

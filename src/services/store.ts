@@ -5,9 +5,11 @@
 // the only write path in the app.
 //
 // Conflicts resolve per item, not per day. The outbox records which day keys
-// changed locally; on flush we re-read the remote month and three-way merge
-// each dirty day against the last state we know the server had. Two devices
-// adding food to the same day both keep their items.
+// changed locally; on flush we try a single optimistic PUT against the last
+// known server SHA (one round trip, no GET-after-PUT race on back-to-back
+// edits), and on a 409/422 conflict fall back to re-reading the remote month
+// and three-way merging each dirty day against the last state we know the
+// server had. Two devices adding food to the same day both keep their items.
 //
 // Reads pull from the server once per month per session and fall back to the
 // cache when that fails. localStorage is an offline fallback, never the source
@@ -40,6 +42,9 @@ const DRAFT = "gainz.draft";
 /** Last state we know the server had, kept so merges can tell a local deletion
  *  apart from an item another device just added. */
 const BASE = "gainz.base.";
+/** Server blob SHA matching BASE, so flushPath() can push in one optimistic
+ *  PUT and only pay for a GET + merge when another device actually raced us. */
+const SHA = "gainz.sha.";
 /** Per-path ETag, so a re-read of an unchanged month costs a bodyless 304. */
 const ETAG = "gainz.etag.";
 
@@ -114,6 +119,15 @@ function writeBase(path: string, text: string): void {
   localStorage.setItem(BASE + path, text);
 }
 
+function readSha(path: string): string | null {
+  return localStorage.getItem(SHA + path);
+}
+
+function writeSha(path: string, sha: string | null): void {
+  if (sha) localStorage.setItem(SHA + path, sha);
+  else localStorage.removeItem(SHA + path);
+}
+
 /** Only offered when we still hold the body it describes. */
 function readEtag(path: string): string | null {
   return readCache(path) === null ? null : localStorage.getItem(ETAG + path);
@@ -173,6 +187,7 @@ async function fetchMonth(m: MonthKey): Promise<MonthFile> {
   const text = remote.kind === "file" ? remote.text : JSON.stringify(emptyMonth());
   writeCache(path, text);
   writeBase(path, text);
+  writeSha(path, remote.kind === "file" ? remote.sha : null);
   if (remote.kind === "file") writeEtag(path, remote.etag);
   return JSON.parse(text) as MonthFile;
 }
@@ -336,9 +351,13 @@ export async function refreshConfig(): Promise<Config | null> {
   if (isDirty(CONFIG_PATH)) return cachedConfig();
   const remote = await getFile(settings(), CONFIG_PATH, readEtag(CONFIG_PATH));
   if (isDirty(CONFIG_PATH)) return cachedConfig();
-  if (remote.kind === "missing") return null;
+  if (remote.kind === "missing") {
+    writeSha(CONFIG_PATH, null);
+    return null;
+  }
   if (remote.kind === "unchanged") return cachedConfig();
   writeCache(CONFIG_PATH, remote.text);
+  writeSha(CONFIG_PATH, remote.sha);
   writeEtag(CONFIG_PATH, remote.etag);
   return withDefaults(JSON.parse(remote.text));
 }
@@ -395,47 +414,88 @@ export function mergeDay(base: Day | undefined, local: Day, remote: Day | undefi
   return day;
 }
 
-async function flushPath(path: string): Promise<void> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    // Unconditional: this needs the remote body to merge against and its sha to
-    // write with, so there is nothing a 304 could save here.
-    const remote = await getFile(settings(), path);
-    const current = remote.kind === "file" ? remote : null;
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-    // Snapshot local state *after* the async GET so any edit that landed while
-    // GET was in flight is folded into this push and never overwritten.
+async function flushPath(path: string): Promise<void> {
+  // Up to 3 full GET + merge attempts, plus 1 free optimistic PUT upfront when
+  // we already know the server blob SHA.
+  let mergeAttempts = 0;
+  while (mergeAttempts < 3) {
+    const preDirty = readOutbox()[path];
+    if (preDirty === undefined) return;
+
+    const knownSha = readSha(path);
+    const optimistic = knownSha !== null && (preDirty === null || readBase(path) !== null);
+    let current: { text: string; sha: string } | null = null;
+
+    if (!optimistic) {
+      if (mergeAttempts > 0) await delay(300 * 3 ** (mergeAttempts - 1));
+      mergeAttempts++;
+      // Unconditional: this needs the remote body to merge against and its sha
+      // to write with, so there is nothing a 304 could save here.
+      const remote = await getFile(settings(), path);
+      current = remote.kind === "file" ? remote : null;
+    }
+
+    // Snapshot local state *after* any async GET so edits that landed while
+    // GET was in flight are folded into this push and never overwritten.
     const snapGen = gen(path);
     const dirtyDays = readOutbox()[path];
     if (dirtyDays === undefined) return;
     const localText = readCache(path);
-    if (localText === null) return;
+    if (localText === null) {
+      // Orphaned outbox entry with no cached body; drop it so drainOutbox
+      // cannot spin forever.
+      const o = readOutbox();
+      delete o[path];
+      writeOutbox(o);
+      return;
+    }
 
     let text: string;
-    if (dirtyDays === null) {
-      text = localText;
-    } else {
-      const local = JSON.parse(localText) as MonthFile;
-      const base = readBase(path);
-      const merged = current ? (JSON.parse(current.text) as MonthFile) : emptyMonth();
-      for (const day of dirtyDays) {
-        const value = local.days[day];
-        if (value) merged.days[day] = mergeDay(base?.days[day], value, merged.days[day]);
-        else delete merged.days[day];
+    let targetSha: string | null;
+    if (optimistic) {
+      targetSha = knownSha;
+      if (dirtyDays === null) {
+        text = localText;
+      } else {
+        const local = JSON.parse(localText) as MonthFile;
+        local.days = Object.fromEntries(
+          Object.entries(local.days).sort(([a], [b]) => a.localeCompare(b)),
+        );
+        text = JSON.stringify(local, null, 2);
       }
-      merged.days = Object.fromEntries(Object.entries(merged.days).sort(([a], [b]) => a.localeCompare(b)));
-      text = JSON.stringify(merged, null, 2);
-      // Persist the merged month before yielding to PUT, so any edit that lands
-      // while PUT is in flight builds on top of the merged items rather than
-      // losing remote additions once base advances to `text` below.
-      writeCache(path, text);
+    } else {
+      targetSha = current?.sha ?? null;
+      if (dirtyDays === null) {
+        text = localText;
+      } else {
+        const local = JSON.parse(localText) as MonthFile;
+        const base = readBase(path);
+        const merged = current ? (JSON.parse(current.text) as MonthFile) : emptyMonth();
+        for (const day of dirtyDays) {
+          const value = local.days[day];
+          if (value) merged.days[day] = mergeDay(base?.days[day], value, merged.days[day]);
+          else delete merged.days[day];
+        }
+        merged.days = Object.fromEntries(
+          Object.entries(merged.days).sort(([a], [b]) => a.localeCompare(b)),
+        );
+        text = JSON.stringify(merged, null, 2);
+        // Persist the merged month before yielding to PUT, so any edit that lands
+        // while PUT is in flight builds on top of the merged items rather than
+        // losing remote additions once base advances to `text` below.
+        writeCache(path, text);
+      }
     }
 
     try {
-      await putFile(settings(), path, text, current?.sha ?? null, `update ${path}`);
-      // What we just pushed is now the agreed state, so it becomes the base for
-      // the next merge. The PUT reply carries no etag we can reuse, so the next
-      // read of this path goes out unconditional.
+      const newSha = await putFile(settings(), path, text, targetSha, `update ${path}`);
+      // What we just pushed is now the agreed state, so it becomes the base and
+      // SHA for the next edit/merge. The PUT reply carries no etag we can reuse,
+      // so the next read of this path goes out unconditional.
       writeBase(path, text);
+      writeSha(path, newSha);
       writeEtag(path, null);
       // Only clear the outbox entry when nothing newer arrived during the PUT;
       // otherwise leave it dirty so drainOutbox() pushes the newer edit next.
@@ -448,7 +508,9 @@ async function flushPath(path: string): Promise<void> {
     } catch (e) {
       const status = (e as { status?: number }).status;
       if (status !== 409 && status !== 422) throw e;
-      // Someone else wrote between our GET and PUT. Re-read and retry.
+      // Someone else wrote (or our stored SHA was stale). Clear the stored SHA
+      // so the next iteration does a full GET + three-way merge.
+      writeSha(path, null);
     }
   }
   throw new Error(`Could not sync ${path} after 3 attempts`);

@@ -8,6 +8,7 @@ import { historyFor } from "../src/services/derived.js";
 import { getFile, isAuthError } from "../src/services/github.js";
 import { saveSettings } from "../src/services/settings.js";
 import {
+  cachedDay,
   flush,
   invalidateMonths,
   mergeDay,
@@ -192,7 +193,7 @@ describe("store sync races", () => {
       anthropicKey: "",
       openaiKey: "",
     });
-    invalidateMonths("2026-08", "2026-09", "2026-10", "2026-11", "2026-12");
+    invalidateMonths("2026-08", "2026-09", "2026-10", "2026-11", "2026-12", "2027-01", "2027-02");
   });
 
   afterEach(() => {
@@ -350,6 +351,107 @@ describe("store sync races", () => {
         },
       );
     }
+  });
+
+  it("pushes in one optimistic PUT using the stored SHA across back-to-back edits", async () => {
+    const initial: MonthFile = { version: 1, days: { "2027-01-05": { items: [] } } };
+    let remote = { text: JSON.stringify(initial), sha: "sha-0" };
+    let gets = 0;
+    let puts = 0;
+
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts++;
+        const body = JSON.parse(String(init.body)) as { content: string; sha?: string };
+        if (body.sha !== remote.sha) return new Response("conflict", { status: 409 });
+        remote = { text: fromB64(body.content), sha: `sha-${puts}` };
+        return new Response(JSON.stringify({ content: { sha: remote.sha } }), { status: 200 });
+      }
+      gets++;
+      return new Response(JSON.stringify({ content: b64(remote.text), sha: remote.sha }), { status: 200 });
+    }) as typeof fetch;
+
+    // Initial read seeds cache, base, and SHA.
+    await readMonth("2027-01", "server");
+    assert.equal(gets, 1);
+    gets = 0;
+
+    // First edit flushes in 1 PUT, 0 GETs.
+    const a = item("a", "2027-01-05T08:00:00.000Z");
+    await updateDay("2027-01-05", (d) => d.items.push(a));
+    await flush();
+    assert.equal(gets, 0);
+    assert.equal(puts, 1);
+
+    // Second edit chains off PUT #1's returned SHA: still 0 GETs, 1 PUT.
+    const b = item("b", "2027-01-05T09:00:00.000Z");
+    await updateDay("2027-01-05", (d) => d.items.push(b));
+    await flush();
+    assert.equal(gets, 0);
+    assert.equal(puts, 2);
+    assert.equal(pendingWrites(), 0);
+    const saved = JSON.parse(remote.text) as MonthFile;
+    assert.deepEqual(
+      saved.days["2027-01-05"]!.items.map((x) => x.id),
+      ["a", "b"],
+    );
+  });
+
+  it("falls back to GET + 3-way merge when an optimistic PUT hits 409 from another device", async () => {
+    const shared = item("shared", "2027-02-01T07:00:00.000Z");
+    const otherDevice = item("remote", "2027-02-01T08:00:00.000Z");
+    const localNew = item("local", "2027-02-01T09:00:00.000Z");
+
+    const baseMonth: MonthFile = { version: 1, days: { "2027-02-01": { items: [shared] } } };
+    let remote = { text: JSON.stringify(baseMonth), sha: "sha-0" };
+    let gets = 0;
+    let puts = 0;
+
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts++;
+        const body = JSON.parse(String(init.body)) as { content: string; sha?: string };
+        if (body.sha !== remote.sha) return new Response("conflict", { status: 409 });
+        remote = { text: fromB64(body.content), sha: `sha-${puts}` };
+        return new Response(JSON.stringify({ content: { sha: remote.sha } }), { status: 200 });
+      }
+      gets++;
+      return new Response(JSON.stringify({ content: b64(remote.text), sha: remote.sha }), { status: 200 });
+    }) as typeof fetch;
+
+    await readMonth("2027-02", "server");
+    gets = 0;
+
+    // Another device writes to GitHub behind our back, advancing remote SHA.
+    const remoteUpdated: MonthFile = { version: 1, days: { "2027-02-01": { items: [shared, otherDevice] } } };
+    remote = { text: JSON.stringify(remoteUpdated), sha: "sha-other" };
+
+    // Local device logs its own food item and flushes: optimistic PUT gets 409,
+    // falls back to GET + 3-way merge, and preserves both items.
+    await updateDay("2027-02-01", (d) => d.items.push(localNew));
+    await flush();
+
+    assert.equal(puts, 2); // 1 rejected optimistic PUT + 1 merged PUT
+    assert.equal(gets, 1); // 1 fallback GET
+    assert.equal(pendingWrites(), 0);
+    const saved = JSON.parse(remote.text) as MonthFile;
+    assert.deepEqual(
+      saved.days["2027-02-01"]!.items.map((x) => x.id),
+      ["shared", "remote", "local"],
+    );
+    // Local cache also received the other device's item via the merge.
+    assert.deepEqual(
+      cachedDay("2027-02-01").items.map((x) => x.id),
+      ["shared", "remote", "local"],
+    );
+  });
+
+  it("drops an orphaned outbox entry when its cached body is missing", async () => {
+    localStorage.setItem("gainz.outbox", JSON.stringify({ "data/2027/2027-02.json": ["2027-02-01"] }));
+    globalThis.fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+
+    await flush();
+    assert.equal(pendingWrites(), 0);
   });
 
   it("bumps revision on real writes only and coalesces onChange notifications per tick", async () => {
